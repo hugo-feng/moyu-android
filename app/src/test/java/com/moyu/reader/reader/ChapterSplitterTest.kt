@@ -131,29 +131,46 @@ class ChapterSplitterTest {
     }
 
     /**
-     * 观察到的真实行为（误切，值得记录）：
-     * RE_SPECIAL 只要求「行首出现 前言/序言/楔子/番外…」，后面允许直接跟最多 30 个字符，
-     * 因此**普通句子**只要以此类词开头、且整行不超过 40 字，就会被当成章节标题，
-     * 而且标题会被拼成「整句 + 残留尾巴」的重复形式。
+     * 回归测试：以特殊篇名开头的**普通句子**不得被当成章节标题。
+     *
+     * 这曾经是一个真实 bug：RE_SPECIAL 原先写成「篇名 + 可选分隔符 + 最多 30 字的尾巴」，
+     * 于是「前言部分内容。」被切成一个叫「前言部分内容。 部分内容。」的章节 ——
+     * 既误切，又把尾巴重复拼进了标题。中文小说里这类句子（「前言里说过…」）
+     * 出现频率不低，属于会真实影响阅读的缺陷。
+     *
+     * 修复依据：中文篇名与标题之间一定有空白（「楔子 雪夜」），
+     * 否则整行就是一个纯篇名（「前言」）。两者都不满足才判为普通句子。
      */
     @Test
-    fun `short sentences starting with a special name are misdetected as headings (observed)`() {
-        val text = "前言部分内容。\n正文继续。\n"
-        val chapters = ChapterSplitter.split(text)
-
-        assertEquals("OBSERVED: a plain sentence became a chapter", 1, chapters.size)
-        assertTrue("OBSERVED: detected=true for a non-heading", chapters[0].detected)
-        assertEquals("前言部分内容。 部分内容。", chapters[0].title)
-        assertLossless(text, chapters)
-
-        // 同一类误切在其它特殊词上同样出现
-        listOf("序言里说过这件事。", "楔子其实还没写完。", "番外小故事一则。").forEach { line ->
+    fun `plain sentences starting with a special name are NOT headings`() {
+        val sentences = listOf("前言部分内容。", "序言里说过这件事。", "楔子其实还没写完。", "番外小故事一则。")
+        sentences.forEach { line ->
             val doc = "$line\n正文继续。\n"
-            val result = ChapterSplitter.split(doc)
-            assertEquals("line=<$line>", 1, result.size)
-            assertTrue("OBSERVED false positive for <$line>", result[0].detected)
-            assertLossless(doc, result)
+            val chapters = ChapterSplitter.split(doc)
+
+            assertTrue(
+                "line=<$line> must not be split into chapters; titles=${chapters.map { it.title }}",
+                chapters.none { it.detected },
+            )
+            // 整句必须完好地留在正文里，一个字都不能丢
+            assertEquals("line=<$line>", line, chapters[0].content.take(line.length))
+            assertLossless(doc, chapters)
         }
+    }
+
+    /** 真正的特殊篇名仍然要能识别 —— 修复不能把功能一起收掉。 */
+    @Test
+    fun `real special headings are still detected after the fix`() {
+        // 纯篇名
+        assertEquals("楔子", ChapterSplitter.split("楔子\n正文。\n")[0].title)
+        assertEquals("前言", ChapterSplitter.split("前言\n正文。\n")[0].title)
+        // 篇名 + 空白 + 标题
+        val withSubtitle = ChapterSplitter.split("楔子 雪夜\n正文。\n")
+        assertEquals("楔子 雪夜", withSubtitle[0].title)
+        assertTrue(withSubtitle[0].detected)
+        // 番外 + 序号 + 空白 + 标题
+        val extras = ChapterSplitter.split("番外01 那年春深\n正文。\n")
+        assertEquals("番外01 那年春深", extras[0].title)
     }
 
     @Test

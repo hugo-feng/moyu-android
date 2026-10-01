@@ -49,11 +49,31 @@ object ChapterSplitter {
             "([^】》\\]）)]*)[】》\\]）)]\\s*(.*)$"
     )
 
-    /** 特殊篇名。 */
+    /**
+     * 特殊篇名。与 Web 端 src/engine/chapters.ts 的 RE_SPECIAL 逐字对应。
+     *
+     * 这里曾经写成「篇名 + 可选分隔符 + 最多 30 字的尾巴」，实际会把
+     * **以篇名开头的普通句子**整句当成标题：正文里的「前言部分内容。」
+     * 会被切成一个叫「前言部分内容。 部分内容。」的章节（尾巴还被重复拼了一遍）。
+     *
+     * 收紧的依据是中文篇名的实际写法：篇名与标题之间一定有空白
+     * （「楔子 雪夜」「番外 那年春深」），否则整行就是一个纯篇名（「前言」「楔子」）。
+     *
+     * 分组约定（改动正则时必须同步维护，取错组会让功能静默失效）：
+     *   group1 = 分支 1 的纯篇名；group2 = 分支 2 的篇名，group3 = 分支 2 的标题。
+     *
+     * 分支 1 的尾部空白是 `[ \t\u3000]*` 而不是 `[\s\u3000]*`，这一点很关键：
+     * `\s` 包含换行，会让分支 1 吃掉「楔子 雪夜」中间的空格后仍然匹配成功，
+     * 于是整行被「纯篇名」分支抢走，真正的标题反而被当成了篇名。
+     * 只允许空格与制表符，才能逼正则引擎在遇到「空格 + 标题」时改走分支 2。
+     *
+     * 用原始字符串（"""）而不是普通字符串：普通字符串里写 "\$" 会展开成
+     * 字面反斜杠加美元符，正则收到的是「匹配字面 $ 字符」而非行尾锚点，
+     * 结果是整个正则永远匹配不上 —— 这个坑已经踩过一次。
+     */
     private val RE_SPECIAL = Regex(
-        "^[\\s\\u3000]*(?:序章|序言|序|自序|前言|引子|楔子|引言|尾声|终章|完结章|后记|附录|" +
-            "番外[0-9零一二三四五六七八九十]*|外传|作者的话|作品相关|設定|设定|人物介绍)" +
-            "[\\s\\u3000]*[:：.、]?[\\s\\u3000]*(.{0,30})$"
+        """^[\s\u3000]*(序章|序言|序|自序|前言|引子|楔子|引言|尾声|终章|完结章|后记|附录|番外[0-9零一二三四五六七八九十]*|外传|作者的话|作品相关|設定|设定|人物介绍)[ \t\u3000]*[:：.、]?[ \t\u3000]*${'$'}""" +
+            """|^[\s\u3000]*(序章|序言|序|自序|前言|引子|楔子|引言|尾声|终章|完结章|后记|附录|番外[0-9零一二三四五六七八九十]*|外传|作者的话|作品相关|設定|设定|人物介绍)[\s\u3000]+(.{1,30})[\s\u3000]*${'$'}"""
     )
 
     /** 低置信：一、标题 */
@@ -96,14 +116,14 @@ object ChapterSplitter {
     private fun matchTitleLine(line: String, allowLowConfidence: Boolean): Pair<String, Int>? {
         // 特殊篇名（序章/楔子/番外…）
         RE_SPECIAL.find(line)?.let { m ->
-            val head = cleanTitle(line)
-            val tail = cleanTitle(m.groupValues.getOrElse(1) { "" })
-            return if (tail.isNotEmpty()) {
-                val first = head.split(Regex("[\\s\\u3000]")).firstOrNull().orEmpty()
-                "$first $tail" to 0
-            } else {
-                head to 0
+            // 分支 2（篇名 + 空白 + 标题）命中时 group2/group3 有值，标题是「篇名 标题」；
+            // 分支 1（纯篇名）命中时只有 group1，标题就是篇名本身。
+            val marker = cleanTitle(m.groupValues.getOrElse(2) { "" })
+            val tail = cleanTitle(m.groupValues.getOrElse(3) { "" })
+            if (marker.isNotEmpty()) {
+                return (if (tail.isNotEmpty()) "$marker $tail" else marker) to 0
             }
+            return cleanTitle(m.groupValues.getOrElse(1) { "" }) to 0
         }
 
         // 【第一章】标题

@@ -204,19 +204,25 @@ class MoyuDatabaseTest {
     }
 
     /**
-     * 观察到的行为（不是任务要求，但值得记录）：
-     * `reading_positions` 实体**没有声明外键**，所以删除书籍后它不会跟着消失，
-     * 会留下一条孤儿行。其它四张子表都正确级联。
+     * 回归测试：删除书籍必须把它的阅读位置一起删掉。
+     *
+     * 这曾经是一个真实缺陷：`reading_positions` 实体漏声明了外键，
+     * 于是删书之后会留下一条孤儿行（其余四张子表都正常级联）。
+     * 孤儿行不只是脏数据 —— 同一本书被重新导入时，它会被当成
+     * 「上次读到这儿」，让刚导入的新书一打开就跳到旧位置。
      */
     @Test
-    fun `reading position row survives book deletion because it declares no foreign key`() = runBlocking {
+    fun `deleting a book cascades to its reading position`() = runBlocking {
         bookDao.upsert(book("b1"))
+        bookDao.upsert(book("b2"))
         positionDao.upsert(position("b1"))
+        positionDao.upsert(position("b2"))
 
         bookDao.deleteById("b1")
 
         assertNull(bookDao.findById("b1"))
-        assertNotNull("OBSERVED: orphaned reading_positions row still present", positionDao.find("b1"))
+        assertNull("reading position must be deleted with its book", positionDao.find("b1"))
+        assertNotNull("the other book's position must be untouched", positionDao.find("b2"))
     }
 
     // ------------------------------------------------------- 判重

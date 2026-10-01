@@ -93,8 +93,24 @@ data class ChapterEntity(
  *
  * 一章一条（主键 book_id），只保留最新位置：阅读器不需要位置历史，
  * 而每次翻页都写一条历史会产生大量无用数据。
+ *
+ * 外键说明：这里必须声明 CASCADE 外键。原先漏了它 ——
+ * 后果是删掉一本书之后，reading_positions 里会留下一条孤儿行，
+ * 而其余四张子表（chapters / bookmarks / highlights / reading_sessions）都正常级联。
+ * 孤儿行不只是脏数据：同一本书被重新导入时它会被当成「上次读到这儿」，
+ * 让新书一打开就跳到旧位置。
  */
-@Entity(tableName = "reading_positions")
+@Entity(
+    tableName = "reading_positions",
+    foreignKeys = [
+        ForeignKey(
+            entity = BookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["book_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
 data class ReadingPositionEntity(
     @PrimaryKey @ColumnInfo(name = "book_id") val bookId: String,
     @ColumnInfo(name = "chapter_index") val chapterIndex: Int,
