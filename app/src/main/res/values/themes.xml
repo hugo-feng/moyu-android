@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      日间启动主题。
+      刻意不使用系统默认的 SplashScreen 浅色背景：墨阅是纸感暖色应用，
+      启动瞬间必须是米色底，否则冷启动会先闪一下白再变米色，观感很廉价。
+      夜间变体见 values-night/themes.xml。
+    -->
+    <style name="Theme.Moyu" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/moyu_paper</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

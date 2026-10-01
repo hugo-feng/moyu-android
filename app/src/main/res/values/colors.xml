@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      颜色定义与 Web 验证器的设计令牌保持同一套取值（src/styles.css 的 :root）。
+      两端同源的好处：改一处配色时能明确知道另一处该改什么，不会各调各的。
+    -->
+    <color name="moyu_paper">#F7F3EA</color>
+    <color name="moyu_paper_surface">#FBF8F2</color>
+    <color name="moyu_card">#FFFFFF</color>
+    <color name="moyu_raise">#F2ECE0</color>
+
+    <color name="moyu_ink">#33302B</color>
+    <color name="moyu_ink_soft">#5C564D</color>
+    <color name="moyu_ink_mute">#8C8377</color>
+    <color name="moyu_ink_faint">#B3AA9C</color>
+
+    <color name="moyu_line">#E7E0D3</color>
+    <color name="moyu_line_strong">#D8CFBD</color>
+
+    <color name="moyu_accent">#8A6A46</color>
+    <color name="moyu_accent_soft">#B39270</color>
+    <color name="moyu_accent_wash">#F0E6D6</color>
+    <color name="moyu_accent_ink">#6B5133</color>
+
+    <color name="moyu_danger">#A5453A</color>
+    <color name="moyu_success">#5C7A4A</color>
+
+    <!-- 深色（夜幕） -->
+    <color name="moyu_night_bg">#16171A</color>
+    <color name="moyu_night_surface">#1D1F23</color>
+    <color name="moyu_night_card">#24262B</color>
+    <color name="moyu_night_ink">#B9BCC2</color>
+    <color name="moyu_night_ink_mute">#71757D</color>
+    <color name="moyu_night_line">#31343A</color>
+    <color name="moyu_night_accent">#C2A179</color>
+</resources>

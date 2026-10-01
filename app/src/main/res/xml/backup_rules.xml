@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 云端备份/恢复规则：只备份用户数据（书库、进度、笔记），不备份可重新生成的内容 -->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="datastore" />
+    <exclude domain="file" path="cache" />
+    <exclude domain="file" path="covers" />
+</full-backup-content>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间启动主题：与夜幕配色一致，避免深色模式下启动闪白 -->
+    <style name="Theme.Moyu" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/moyu_night_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>
