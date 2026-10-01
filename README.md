@@ -14,9 +14,10 @@
 | 最低版本 | Android 8.0（API 26） |
 | 目标版本 | Android 15（API 35） |
 | 签名 | v2 方案，`CN=MoYu Reader`（仓库内自签名密钥，见下） |
-| SHA-256 | `954D3B8FFB5593D9F6A3909B56DC489C850B9E44726BC24414FC013ED70D4F5D` |
+| SHA-256 | `BD51C86F72AC81D98D76798A0267B6247F6B717754C63BD5C5E2B5C4B9F63DDC` |
 
 安装：把 APK 传到手机，用文件管理器点开安装（需允许「安装未知来源应用」）。
+另有一份便于取用的副本：`D:\work\墨阅-阅读器-v1.0.0.apk`（与上表同一文件）。
 
 > **密钥说明**：`app/keystore/moyu-release.jks`（口令均为 `moyureader`，别名 `moyu`）
 > 是仓库内的演示密钥，开源项目常见做法，便于任何人直接构建出可安装的 APK。
