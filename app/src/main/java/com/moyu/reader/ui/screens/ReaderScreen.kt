@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -62,6 +62,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -211,8 +212,8 @@ fun ReaderScreen(
                     chapterNumberLabel = chapterNumberLabel(chapter?.title.orEmpty(), chapterIndex),
                     showTitle = currentPage.start == 0,
                     settings = settings,
-                    pageLabel = "${pageIndex + 1}/${pages.size.coerceAtLeast(1)}",
-                    percentLabel = "${(viewModelPercent(pages, chapterHeaders, chapterIndex, pageIndex) * 100).toInt()}%",
+                    pageNumber = pageIndex + 1,
+                    percent = viewModelPercent(pages, chapterHeaders, chapterIndex, pageIndex),
                     highlights = highlights,
                     flipToken = 0,
                 )
@@ -396,8 +397,8 @@ private fun PagedReader(
     chapterNumberLabel: String,
     showTitle: Boolean,
     settings: com.moyu.reader.data.prefs.ReaderSettings,
-    pageLabel: String,
-    percentLabel: String,
+    pageNumber: Int,
+    percent: Float,
     highlights: List<IntRange>,
     flipToken: Int,
 ) {
@@ -430,73 +431,107 @@ private fun PagedReader(
         else -> 0f
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                rotationY = rotation
-                translationX = translation
-                alpha = progress.coerceIn(0f, 1f)
-                cameraDistance = 18f * density
+    // 天头书眉 / 地脚页码用的字号：正文的 0.62 倍，与 Web 端保持同一比例。
+    val furnitureStyle = TextStyle(
+        fontFamily = fontFamilyFor(settings.fontFamily),
+        fontSize = (settings.fontSizeSp * 0.62f).sp,
+        lineHeight = (settings.fontSizeSp * 0.62f * 1.4f).sp,
+        letterSpacing = settings.letterSpacingEm.sp,
+    )
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationY = rotation
+                    translationX = translation
+                    alpha = progress.coerceIn(0f, 1f)
+                    cameraDistance = 18f * density
+                }
+                .padding(
+                    horizontal = settings.marginDp.dp,
+                    vertical = (settings.marginDp * 0.9f).dp,
+                ),
+        ) {
+            // —— 天头：书眉 ——
+            // 按真实书籍体例，书眉只出现在次页起。章首页的标题本身就在版心内，
+            // 顶上再压一条书眉就是同一句话印两遍。
+            if (!showTitle && chapterTitle.isNotBlank()) {
+                Text(
+                    text = chapterTitle,
+                    style = furnitureStyle,
+                    color = palette.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .alpha(0.85f),
+                )
             }
-            .padding(
-                horizontal = settings.marginDp.dp,
-                vertical = (settings.marginDp * 0.9f).dp,
-            ),
-    ) {
-        // 正文
-        Box(modifier = Modifier.weight(1f)) {
-            SelectionContainer {
-                Column {
-                    if (showTitle) {
+
+            // —— 版心：正文 —— 上下留白大于左右，形成书籍的不对称版心
+            Box(modifier = Modifier.weight(1f)) {
+                SelectionContainer {
+                    Column {
+                        if (showTitle) {
+                            Text(
+                                text = chapterNumberLabel,
+                                style = furnitureStyle,
+                                color = palette.textSecondary,
+                                modifier = Modifier.padding(bottom = 6.dp),
+                            )
+                            Text(
+                                text = chapterTitle,
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    fontFamily = fontFamilyFor(settings.fontFamily),
+                                ),
+                                color = palette.text,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(bottom = 14.dp),
+                            )
+                        }
                         Text(
-                            text = chapterNumberLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.textSecondary,
-                            modifier = Modifier.padding(bottom = 6.dp),
-                        )
-                        Text(
-                            text = chapterTitle,
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontFamily = fontFamilyFor(settings.fontFamily),
-                            ),
+                            text = buildPageText(pageText, settings, highlights, pageStart),
+                            style = bodyTextStyle(settings),
                             color = palette.text,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(bottom = 14.dp),
                         )
                     }
-                    Text(
-                        text = buildPageText(pageText, settings, highlights, pageStart),
-                        style = bodyTextStyle(settings),
-                        color = palette.text,
-                    )
                 }
+            }
+
+            // —— 地脚：页码居中 ——
+            // 真书的页码只是一个数字，不带章节名、不带百分比。
+            // 「还有多久读完」交给下面那条贴页缘的细线 —— 它不占版心。
+            if (settings.showPageNumber) {
+                Text(
+                    text = pageNumber.toString(),
+                    style = furnitureStyle,
+                    color = palette.textSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
+                        .alpha(0.85f),
+                )
             }
         }
 
-        // 页脚：章节名 + 页码 + 进度
-        Row(
+        // —— 全书进度：一条 1dp 细线，贴页的下缘 ——
+        Box(
             modifier = Modifier
+                .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .padding(top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .height(1.dp)
+                .background(palette.textSecondary.copy(alpha = 0.16f)),
         ) {
-            Text(
-                text = chapterTitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.textSecondary,
-                maxLines = 1,
+            Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .alpha(0.9f),
+                    .fillMaxWidth(percent.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .background(palette.textSecondary.copy(alpha = 0.5f)),
             )
-            if (settings.showPageNumber) {
-                Text(
-                    text = "$pageLabel · $percentLabel",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary,
-                )
-            }
         }
     }
 }

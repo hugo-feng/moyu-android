@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -38,7 +38,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -123,7 +123,7 @@ fun ReaderTopBar(
             )
         }
         IconAction(
-            icon = if (speaking) Icons.Filled.Pause else Icons.Filled.VolumeUp,
+            icon = if (speaking) Icons.Filled.Pause else Icons.AutoMirrored.Filled.VolumeUp,
             contentDescription = if (speaking) "停止朗读" else "开始朗读",
             onClick = onSpeak,
         )

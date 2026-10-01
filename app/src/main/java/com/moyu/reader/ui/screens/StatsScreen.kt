@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -72,7 +72,9 @@ fun StatsScreen(
         MoyuTopBar(title = "阅读统计", onBack = onBack)
 
         val current = stats
-        if (current == null || (loading && current == null)) {
+        // 首次加载时 stats 还是 null，显示占位；
+        // 之后即便在刷新也继续显示上一次的统计结果，避免页面闪成空白。
+        if (current == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "正在统计…",

@@ -2,22 +2,34 @@
 <!--
   墨阅 · 本地阅读器
 
-  权限设计（刻意保持最小）：
-    本地书通过 SAF（存储访问框架）由用户主动授权文件夹或文件，
-    Android 10+ 无需任何存储权限即可读写授权范围内的文件。
-    因此这里**不申请** READ_EXTERNAL_STORAGE / MANAGE_EXTERNAL_STORAGE ——
-    这既符合最小权限原则，也让应用可以正常上架 Google Play。
+  权限设计（刻意保持为空）：
+    1. 本地书通过 SAF（存储访问框架）由用户主动授权文件夹或文件，
+       Android 10+ 无需任何存储权限即可读写授权范围内的文件。
+       因此这里**不申请** READ_EXTERNAL_STORAGE / MANAGE_EXTERNAL_STORAGE ——
+       这既符合最小权限原则，也让应用可以正常上架 Google Play。
+    2. 朗读用的是系统 TextToSpeech，它由系统进程提供服务，
+       **不需要** INTERNET 权限（这里曾经错误地申请过，已移除）。
+    3. EPUB 用 jsoup 解析、封面用 Coil 加载，两者都只处理本地字节流，
+       同样不需要联网。
+
+  结论：本应用申请 0 个权限，是真正的完全离线阅读器。
+  下面的 tools:node="remove" 是防线而不是装饰：任何依赖一旦往合并后的清单里
+  塞进联网类权限，构建就会把它删掉，保证「离线」这个承诺不会随依赖升级而悄悄失效。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 朗读需要（TTS 引擎查询） -->
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 朗读需要的 TTS 引擎查询（这是 <queries>，不是权限） -->
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
     </queries>
+
+    <!-- 防御性移除：依赖库若试图合并进网络相关权限，一律删掉 -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
 
     <application
         android:name=".MoyuApplication"

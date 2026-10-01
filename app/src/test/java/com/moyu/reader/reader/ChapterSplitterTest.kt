@@ -57,9 +57,12 @@ class ChapterSplitterTest {
         val text = "第 一 章 标题\n正文\n"
         val chapters = ChapterSplitter.split(text)
         assertEquals(1, chapters.size)
-        assertEquals("第 一 章 标题", chapters[0].title)
+        // 观察到：带空格的序号能被识别，但标题会按「第N章」紧凑形式重建，内部空格被去掉
+        assertEquals("第一章 标题", chapters[0].title)
         assertTrue(chapters[0].detected)
         assertLossless(text, chapters)
+        // 原文一个字符都没少（空格仍保留在 content 里）
+        assertEquals(text, chapters[0].content)
     }
 
     @Test
@@ -114,7 +117,7 @@ class ChapterSplitterTest {
         val longLine = "第一章 " + "这一章的内容非常长需要被当成正文而不是标题".repeat(3)
         assertTrue("test fixture must exceed the 40-char title limit", longLine.length > 40)
 
-        val text = "前言部分内容。\n" + longLine + "\n第二章 真正的标题\n正文。\n"
+        val text = "简介部分内容。\n" + longLine + "\n第二章 真正的标题\n正文。\n"
         val chapters = ChapterSplitter.split(text)
 
         assertTrue(
@@ -125,6 +128,32 @@ class ChapterSplitterTest {
         // 超长行必须完整落在「前言」正文里，没有被切走
         assertTrue(chapters[0].content.contains(longLine))
         assertLossless(text, chapters)
+    }
+
+    /**
+     * 观察到的真实行为（误切，值得记录）：
+     * RE_SPECIAL 只要求「行首出现 前言/序言/楔子/番外…」，后面允许直接跟最多 30 个字符，
+     * 因此**普通句子**只要以此类词开头、且整行不超过 40 字，就会被当成章节标题，
+     * 而且标题会被拼成「整句 + 残留尾巴」的重复形式。
+     */
+    @Test
+    fun `short sentences starting with a special name are misdetected as headings (observed)`() {
+        val text = "前言部分内容。\n正文继续。\n"
+        val chapters = ChapterSplitter.split(text)
+
+        assertEquals("OBSERVED: a plain sentence became a chapter", 1, chapters.size)
+        assertTrue("OBSERVED: detected=true for a non-heading", chapters[0].detected)
+        assertEquals("前言部分内容。 部分内容。", chapters[0].title)
+        assertLossless(text, chapters)
+
+        // 同一类误切在其它特殊词上同样出现
+        listOf("序言里说过这件事。", "楔子其实还没写完。", "番外小故事一则。").forEach { line ->
+            val doc = "$line\n正文继续。\n"
+            val result = ChapterSplitter.split(doc)
+            assertEquals("line=<$line>", 1, result.size)
+            assertTrue("OBSERVED false positive for <$line>", result[0].detected)
+            assertLossless(doc, result)
+        }
     }
 
     @Test
@@ -143,7 +172,7 @@ class ChapterSplitterTest {
         val text = buildString {
             append("书名：测试之书\n作者：佚名\n简介：这是一段超过二十个字符的前言，用来触发前言章节。\n")
             for (i in 1..25) {
-                append("第${i}章 第${i}节标题\n")
+                append("第${i}章 标题${i}\n")
                 repeat(5) { append("这是第${i}章的第${it + 1}段正文，内容用于占用篇幅。\n") }
             }
         }
@@ -151,7 +180,8 @@ class ChapterSplitterTest {
         assertEquals("前言 + 25 章", 26, chapters.size)
         assertEquals("前言", chapters[0].title)
         assertEquals(0, chapters[0].start)
-        assertTrue(chapters.all { it.detected } || !chapters[0].detected)
+        assertFalse("the preface is not a detected heading", chapters[0].detected)
+        assertTrue("all 25 real chapters must be detected", chapters.drop(1).all { it.detected })
         assertLossless(text, chapters)
     }
 

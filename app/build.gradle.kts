@@ -139,8 +139,10 @@ dependencies {
     // —— 图片加载（封面）——
     implementation("io.coil-kt:coil-compose:2.7.0")
 
-    // —— 媒体（TTS 需要，阅读朗读用）——
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    // 注意：这里**没有** media3 / exoplayer。
+    // 朗读用的是系统 TextToSpeech（见 reader/TtsController.kt），它走系统服务，不需要媒体库；
+    // 而 media3 会往清单里合并进 ACCESS_NETWORK_STATE 权限 —— 一个完全离线的阅读器
+    // 不该在权限列表里出现任何与网络有关的东西，那是用户第一眼看的地方。
 
     // —— 文档访问（SAF 选文件夹 / 选文件）——
     implementation("androidx.documentfile:documentfile:1.0.1")
@@ -148,6 +150,7 @@ dependencies {
     // —— HTML 解析（EPUB 章节正文提取）——
     // 不自己写标签剥离：HTML 解析用正则必然在某些文档上出错，
     // jsoup 是 Java 生态里事实标准的 HTML 解析库。
+    // 只用它的解析能力，不碰它的网络能力，因此同样不需要任何网络权限。
     implementation("org.jsoup:jsoup:1.18.1")
 
     // —— 测试 ——
