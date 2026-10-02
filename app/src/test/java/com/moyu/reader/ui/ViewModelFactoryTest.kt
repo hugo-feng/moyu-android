@@ -81,8 +81,9 @@ class ViewModelFactoryTest {
 
         for (cls in allViewModelClasses) {
             try {
-                val instance = factory.create(cls)
-                if (instance == null) failures.add("${cls.simpleName}: 工厂返回了 null")
+                // create 的返回类型非空，因此不需要判 null ——
+                // 会出问题的只有「抛异常」这一种情况。
+                factory.create(cls)
             } catch (e: Throwable) {
                 failures.add("${cls.simpleName}: ${e::class.java.simpleName} — ${e.message}")
             }

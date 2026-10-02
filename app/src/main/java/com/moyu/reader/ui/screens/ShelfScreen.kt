@@ -2,6 +2,7 @@ package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
@@ -55,6 +57,7 @@ import com.moyu.reader.data.model.BookFormat
 import com.moyu.reader.data.prefs.ShelfLayout
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.ShelfFilter
+import com.moyu.reader.ui.ShelfGroup
 import com.moyu.reader.ui.ShelfStats
 import com.moyu.reader.ui.ShelfViewModel
 import com.moyu.reader.ui.components.EmptyState
@@ -115,6 +118,8 @@ fun ShelfScreen(
     val continueItem by viewModel.continueReading.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     val filter by viewModel.filter.collectAsStateWithLifecycle()
+    val groupCards by viewModel.groupCards.collectAsStateWithLifecycle()
+    val openGroupName by viewModel.openedGroupName.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val importing by viewModel.importing.collectAsStateWithLifecycle()
 
@@ -175,13 +180,76 @@ fun ShelfScreen(
         } else {
             item {
                 ShelfTitleRow(
-                    title = "书架",
-                    subtitle = "${items.size} 本书",
+                    title = openGroupName ?: "书架",
+                    subtitle = if (openGroupName != null) {
+                        "${items.size} 本书 · 来自分组"
+                    } else {
+                        "${items.size} 本书"
+                    },
+                    onBack = if (openGroupName != null) {
+                        { viewModel.closeGroup() }
+                    } else {
+                        null
+                    },
                 )
             }
         }
 
-        if (items.isEmpty()) {
+        /**
+         * 分组卡片（仅书架、且未钻入任何分组时）。
+         *
+         * 形态向番茄小说学习：书架首页先给结构，而不是铺满几百本书的封面。
+         * 每张卡片里露 4 本缩略封面 + 分组名 + 本数，点进去才是这个分组的书。
+         *
+         * 「全部」永远是第一张 —— 它保证用户随时能看到所有书，
+         * 也提供了一个「我刚从分组里出来」的落脚点。
+         */
+        if (!libraryMode && openGroupName == null && groupCards.isNotEmpty()) {
+            item {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val gap = 12.dp
+                    val available = maxWidth - 28.dp
+                    val minColumn = 148.dp
+                    val columns = (((available + gap) / (minColumn + gap)).toInt()).coerceIn(2, 3)
+
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        maxItemsInEachRow = columns,
+                        horizontalArrangement = Arrangement.spacedBy(gap),
+                        verticalArrangement = Arrangement.spacedBy(gap),
+                    ) {
+                        groupCards.forEach { group ->
+                            GroupCard(
+                                group = group,
+                                onClick = { viewModel.openGroup(group.id) },
+                                onDelete = if (group.id == ShelfViewModel.ALL_GROUP_ID) {
+                                    null
+                                } else {
+                                    { viewModel.deleteGroup(group.id) }
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        NewGroupCard(
+                            onCreate = { name -> viewModel.createGroup(name) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+
+        /**
+         * 是否处在「分组总览」这一层。
+         *
+         * 总览下只显示分组卡片，**不显示书的空状态** ——
+         * 那时书还没列出来，显示「书架还空着」会与上面的分组卡片自相矛盾
+         * （卡片上明明写着有多少本）。
+         */
+        val atGroupOverview = !libraryMode && openGroupName == null && groupCards.isNotEmpty()
+        if (items.isEmpty() && !atGroupOverview) {
             item {
                 EmptyState(
                     icon = if (libraryMode) Icons.AutoMirrored.Filled.MenuBook else Icons.Filled.BookmarkBorder,
@@ -216,8 +284,7 @@ fun ShelfScreen(
                     },
                 )
             }
-        } else if (settings.shelfLayout == ShelfLayout.GRID) {
-            /**
+        } else if (settings.shelfLayout == ShelfLayout.GRID) {            /**
              * 网格布局。
              *
              * 这里不用 LazyVerticalGrid，原因是一个真实的缺陷：
@@ -258,6 +325,8 @@ fun ShelfScreen(
                                 item = item,
                                 onClick = { onOpenBook(item.book.id) },
                                 onToggleShelf = { onToggleShelf(item.book) },
+                                groups = groups,
+                                onAssignGroup = { gid -> viewModel.assignToGroup(item.book, gid) },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -457,27 +526,244 @@ private fun SubHeaderActions(
     }
 }
 
-/** 书架页的标题行：一个标题 + 一个数量，仅此而已。 */
+/** 书架页的标题行：一个标题 + 一个数量，必要时带返回。 */
 @Composable
-private fun ShelfTitleRow(title: String, subtitle: String) {
+private fun ShelfTitleRow(
+    title: String,
+    subtitle: String,
+    onBack: (() -> Unit)? = null,
+) {
     val palette = moyuPalette()
-    Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp)) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 钻入分组后才显示返回：分组总览是这一栏的根，没有可返回的地方
+        if (onBack != null) {
+            IconAction(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回分组列表",
+                onClick = onBack,
+            )
+        }
+        Column(modifier = Modifier.padding(start = if (onBack != null) 0.dp else 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineLarge,
+                color = palette.text,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 分组卡片：4 本缩略封面 + 名称 + 本数。
+ *
+ * 形态参考番茄小说：用「一组书的缩略图」表达一个分组，
+ * 比一行文字标签更容易一眼分辨 —— 用户认封面比认名字快。
+ *
+ * 缩略图用固定的小尺寸 + 封面自身的渐变，**不复用完整的 BookCover**：
+ * 那个组件带进度条、格式角标、「加入书架」按钮，缩到 40dp 宽全都看不清，
+ * 反而变成一团噪声。
+ */
+@Composable
+private fun GroupCard(
+    group: ShelfGroup,
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val palette = moyuPalette()
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.card)
+            .clickable(onClick = onClick)
+            .padding(8.dp),
+    ) {
+        // 2 列缩略图。用 Row/Column 手动排而不是 LazyVerticalGrid：
+        // 只有 4 个固定格子，嵌套一个可滚动容器只会带来测量问题。
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(2) { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    repeat(2) { col ->
+                        val book = group.previewBooks.getOrNull(row * 2 + col)
+                        GroupThumb(book = book, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.padding(top = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (group.color != null) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(parseHexColor(group.color) ?: palette.primary),
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                text = group.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (onDelete != null) {
+                Text(
+                    text = if (confirmDelete) "确认" else "✕",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (confirmDelete) Color(0xFFD9584A) else palette.textSecondary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            if (confirmDelete) {
+                                onDelete()
+                                confirmDelete = false
+                            } else {
+                                confirmDelete = true
+                            }
+                        }
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                )
+            }
+        }
         Text(
-            text = title,
-            style = MaterialTheme.typography.headlineLarge,
-            color = palette.text,
-        )
-        Text(
-            text = subtitle,
+            text = if (confirmDelete) "会删掉分组，书不受影响" else "共 ${group.count} 本",
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
-            modifier = Modifier.padding(top = 2.dp),
+            maxLines = 1,
         )
     }
 }
 
-/** 筛选与分组。 */
+/** 分组卡片里的一个小缩略封面；[book] 为 null 时画一个空格子占位。 */
 @Composable
+private fun GroupThumb(book: com.moyu.reader.data.model.Book?, modifier: Modifier = Modifier) {
+    val palette = moyuPalette()
+    // 底色分两种类型（Brush / Color），必须用 if 包住整个 background 调用 ——
+    // 写成 background(if (...) gradient else color) 推不出公共类型，编译不过。
+    val base = modifier
+        .aspectRatio(3f / 4.3f)
+        .clip(RoundedCornerShape(4.dp))
+    Box(
+        modifier = if (book != null) {
+            base.background(coverGradient(book.title))
+        } else {
+            base.background(palette.divider)
+        },
+    ) {
+        if (book != null) {
+            val file = book.coverPath?.let { File(it) }
+            var failed by remember(book.coverPath) { mutableStateOf(false) }
+            if (file != null && file.exists() && !failed) {
+                AsyncImage(
+                    model = file,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    onError = { failed = true },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
+/** 「新建分组」卡片：点开后在原位变成输入框，不弹对话框。 */
+@Composable
+private fun NewGroupCard(
+    onCreate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = moyuPalette()
+    var creating by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.card)
+            .clickable(enabled = !creating) { creating = true }
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // 与 GroupCard 的缩略图区等高，这样两种卡片在同一行里高度一致
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 1.46f),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (creating) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    placeholder = { Text("分组名", style = MaterialTheme.typography.labelSmall) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = null,
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+        }
+
+        if (creating) {
+            Row(
+                modifier = Modifier.padding(top = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                MoyuTextButton(
+                    text = "创建",
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        onCreate(name)
+                        name = ""
+                        creating = false
+                    },
+                )
+                MoyuTextButton(text = "取消", onClick = { creating = false; name = "" })
+            }
+        } else {
+            Text(
+                text = "新建分组",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(top = 7.dp),
+            )
+        }
+    }
+}
+
+/** 把 `#RRGGBB` 解析成 Color；解析不了返回 null（由调用方兜底）。 */
+private fun parseHexColor(hex: String): Color? = try {
+    Color(android.graphics.Color.parseColor(hex))
+} catch (_: IllegalArgumentException) {
+    null
+}
+
+/** 筛选与分组。 */@Composable
 private fun ShelfFilters(
     current: ShelfFilter,
     groups: List<Pair<String, String>>,
@@ -550,21 +836,78 @@ private fun ShelfFilters(
     }
 }
 
-/** 网格布局下的书籍卡片。 */
+/**
+ * 网格布局下的书籍卡片。
+ *
+ * 长按弹出「移到分组」菜单 —— 这是把书放进分组的入口。
+ * 之所以用长按而不是在卡片上再加一个按钮：书架页要保持干净
+ * （用户明确要求「只显示书」），而移动分组是低频动作，
+ * 藏在长按里既不影响观感，也不需要额外的界面空间。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BookGridCard(
-    item: com.moyu.reader.data.model.ShelfItem,
+private fun BookGridCard(    item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
     onToggleShelf: () -> Unit,
+    groups: List<com.moyu.reader.data.model.BookGroup> = emptyList(),
+    onAssignGroup: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
+    var showGroupMenu by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
+            /**
+             * 长按弹分组菜单，点击进书。
+             *
+             * 用 `combinedClickable` 而不是在 Column 上叠一层 pointerInput：
+             * 后者会与内部的「加入书架」按钮抢事件，导致按钮偶尔点不动。
+             */
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { if (groups.isNotEmpty()) showGroupMenu = true },
+            )
             .padding(2.dp),
     ) {
+        if (showGroupMenu) {
+            androidx.compose.material3.DropdownMenu(
+                expanded = true,
+                onDismissRequest = { showGroupMenu = false },
+            ) {
+                Text(
+                    text = "移到分组",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+                groups.forEach { g ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(g.name, style = MaterialTheme.typography.bodySmall) },
+                        onClick = {
+                            onAssignGroup(g.id)
+                            showGroupMenu = false
+                        },
+                    )
+                }
+                if (item.book.groupId != null) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = {
+                            Text(
+                                "移出分组",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD9584A),
+                            )
+                        },
+                        onClick = {
+                            onAssignGroup(null)
+                            showGroupMenu = false
+                        },
+                    )
+                }
+            }
+        }
         BookCover(
             book = item.book,
             percent = item.percent,

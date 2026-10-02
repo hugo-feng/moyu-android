@@ -299,7 +299,96 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
         scope.launch {
             groupRepo.delete(groupId)
             if (_filter.value == ShelfFilter.Group(groupId)) _filter.value = ShelfFilter.All
+            if (_openGroupId.value == groupId) _openGroupId.value = null
             _message.value = "已删除分组"
+        }
+    }
+
+    // ============================================================
+    // 分组卡片（向番茄小说学习的形态）
+    // ============================================================
+
+    /**
+     * 当前「钻入」的分组；null 表示停在分组总览。
+     *
+     * 番茄小说的书架是**两级**的：先看到一组分组卡片（每张卡片里
+     * 露出几本书的封面缩略 + 分组名 + 本数），点进去才看到这个分组的书。
+     * 这样书架首页不会铺满几百本书的封面，而是先给出结构。
+     */
+    private val _openGroupId = MutableStateFlow<String?>(null)
+    val openGroupId: StateFlow<String?> = _openGroupId.asStateFlow()
+
+    fun openGroup(groupId: String) {
+        _openGroupId.value = groupId
+        _filter.value = if (groupId == ALL_GROUP_ID) ShelfFilter.All else ShelfFilter.Group(groupId)
+    }
+
+    fun closeGroup() {
+        _openGroupId.value = null
+        _filter.value = ShelfFilter.All
+    }
+
+    /**
+     * 分组卡片列表。
+     *
+     * 第一张固定是「全部」，它让用户随时能看到所有书 ——
+     * 番茄小说里对应的是「全部」入口。之后是用户自建的分组。
+     *
+     * 预览封面取每个分组的前 4 本。**不在这里做分页或懒加载**：
+     * 分组数量在个位数量级，每张卡片只需要 4 个 Book 对象，
+     * 一次性算完比在 Compose 里为每张卡片各自订阅一次数据流更省。
+     */
+    val groupCards: StateFlow<List<ShelfGroup>> =
+        combine(sourceItems, groups, _libraryMode) { items, groupList, isLibrary ->
+            // 只有书架做分组。书库是「全部导入的书」的平铺列表，
+            // 它承担的是查找而不是整理，套一层分组反而多一次点击。
+            if (isLibrary) return@combine emptyList()
+
+            val all = ShelfGroup(
+                id = ALL_GROUP_ID,
+                name = "全部",
+                color = null,
+                count = items.size,
+                previewBooks = items.take(4).map { it.book },
+            )
+            val grouped = groupList.map { g ->
+                val inGroup = items.filter { it.book.groupId == g.id }
+                ShelfGroup(
+                    id = g.id,
+                    name = g.name,
+                    color = g.color,
+                    count = inGroup.size,
+                    previewBooks = inGroup.take(4).map { it.book },
+                )
+            }
+            listOf(all) + grouped
+        }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * 当前分组里的书（用于钻入后的列表）。
+     *
+     * 与 [items] 的区别：这里**不做排序以外的事**，
+     * 只是把已按筛选过滤过的 items 原样给出，让界面少一次判断。
+     */
+    val openedGroupName: StateFlow<String?> =
+        combine(_openGroupId, groups) { id, list ->
+            when {
+                id == null -> null
+                id == ALL_GROUP_ID -> "全部"
+                else -> list.firstOrNull { it.id == id }?.name
+            }
+        }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** 把书移动到某个分组；[groupId] 为 null 表示移出分组。 */
+    fun assignToGroup(book: Book, groupId: String?) {
+        scope.launch {
+            bookRepo.moveToGroup(book.id, groupId)
+            val name = groupId?.let { id -> groups.value.firstOrNull { it.id == id }?.name }
+            _message.value = if (groupId == null) {
+                "已移出分组：${book.title}"
+            } else {
+                "已把《${book.title}》移到「$name」"
+            }
         }
     }
 
@@ -317,6 +406,9 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
     }
 
     companion object {
+        /** 「全部」分组卡的固定 id。用不可能与真实分组 uuid 冲突的字面量。 */
+        const val ALL_GROUP_ID = "__all__"
+
         /** 分组可选颜色（与纸感主题同族）。 */
         val GROUP_COLORS = listOf(
             "#8A6A46", "#7A8B6F", "#8B7A9E", "#A8825C", "#6E8B9E", "#9E7A7A",
@@ -344,4 +436,20 @@ data class ShelfStats(
     val total: Int,
     val finished: Int,
     val weekSeconds: Int,
+)
+
+/**
+ * 一张分组卡片。
+ *
+ * [previewBooks] 是卡片里那几本缩略封面，最多 4 本 ——
+ * 只取前几本而不是全部：卡片是「看一眼就知道这个分组里大概有什么」，
+ * 把几十本封面都塞进去既看不清也没必要。
+ */
+data class ShelfGroup(
+    val id: String,
+    val name: String,
+    /** 分组色（十六进制字符串）；「全部」没有颜色，用主题色。 */
+    val color: String?,
+    val count: Int,
+    val previewBooks: List<Book>,
 )
