@@ -552,27 +552,11 @@ fun TypographySheet(
                     modifier = Modifier.width(40.dp),
                 )
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "亮度",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.text,
-                    modifier = Modifier.width(72.dp),
-                )
-                Slider(
-                    value = settings.brightness ?: 1f,
-                    onValueChange = { viewModel.updateSettings { store -> store.setBrightness(it) } },
-                    valueRange = 0.15f..1f,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            // 亮度不在这里调：它是系统级设置，应用内再叠一层会与系统的
+            // 自动亮度互相打架（拉低后仍被系统按环境光改动，找不到原因）。
+            // 系统下拉栏已经能调，不必重复提供。
 
-            // —— 自动阅读速度 ——
+            // —— 自动阅读节奏 ——
             SheetGroupTitle("自动阅读")
             Row(
                 modifier = Modifier
@@ -581,15 +565,15 @@ fun TypographySheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${settings.autoReadSpeed} 字/秒",
+                    text = "${settings.autoReadSecondsPerPage} 秒/页",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.text,
                     modifier = Modifier.width(88.dp),
                 )
                 Slider(
-                    value = settings.autoReadSpeed.toFloat(),
-                    onValueChange = { v -> viewModel.updateSettings { store -> store.setAutoReadSpeed(v.toInt()) } },
-                    valueRange = 8f..120f,
+                    value = settings.autoReadSecondsPerPage.toFloat(),
+                    onValueChange = { v -> viewModel.updateSettings { store -> store.setAutoReadSeconds(v.toInt()) } },
+                    valueRange = 2f..60f,
                     modifier = Modifier.weight(1f),
                 )
             }

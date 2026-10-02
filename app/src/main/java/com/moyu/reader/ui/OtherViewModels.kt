@@ -502,8 +502,8 @@ class SettingsViewModel(container: AppContainer) : MoyuViewModel(container) {
     fun setFollowSystemDark(v: Boolean) = scope.launch { store.setFollowSystemDark(v) }
     fun setDynamicColor(v: Boolean) = scope.launch { store.setDynamicColor(v) }
     fun setEyeCare(v: Float) = scope.launch { store.setEyeCare(v) }
-    fun setBrightness(v: Float) = scope.launch { store.setBrightness(v) }
-    fun followSystemBrightness() = scope.launch { store.followSystemBrightness() }
+    // 亮度相关方法已移除：屏幕亮度交由系统设置管理，
+    // 应用内再叠一层会与系统的自动亮度互相打架（见 ReaderSettings 的注释）。
     fun setFontFamily(v: FontFamilyId) = scope.launch { store.setFontFamily(v) }
     fun setFontSize(v: Int) = scope.launch { store.setFontSize(v) }
     fun setLineHeight(v: Float) = scope.launch { store.setLineHeight(v) }
@@ -514,7 +514,7 @@ class SettingsViewModel(container: AppContainer) : MoyuViewModel(container) {
     fun setJustify(v: Boolean) = scope.launch { store.setJustify(v) }
     fun setBold(v: Boolean) = scope.launch { store.setBold(v) }
     fun setPageMode(v: PageMode) = scope.launch { store.setPageMode(v) }
-    fun setAutoReadSpeed(v: Int) = scope.launch { store.setAutoReadSpeed(v) }
+    fun setAutoReadSeconds(v: Int) = scope.launch { store.setAutoReadSeconds(v) }
     fun setKeepScreenOn(v: Boolean) = scope.launch { store.setKeepScreenOn(v) }
     fun setShowStatusBar(v: Boolean) = scope.launch { store.setShowStatusBar(v) }
     fun setShowPageNumber(v: Boolean) = scope.launch { store.setShowPageNumber(v) }

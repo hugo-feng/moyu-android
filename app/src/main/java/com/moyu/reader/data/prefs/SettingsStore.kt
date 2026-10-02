@@ -48,12 +48,26 @@ data class ReaderSettings(
     val bold: Boolean = false,
     val indentEm: Float = 2f,
     val letterSpacingEm: Float = 0.012f,
-    // —— 护眼与亮度 ——
+    // —— 护眼 ——
+    /**
+     * 护眼色温（0f~1f）。
+     *
+     * 这里**刻意没有屏幕亮度**：Android 的亮度是系统级设置，
+     * 应用再叠加一层只会与系统的自动亮度互相打架 ——
+     * 用户拉低应用内亮度后，系统的「根据环境光自动调节」仍按自己的逻辑走，
+     * 结果屏幕忽明忽暗且找不到原因。系统下拉栏已经能调，不必重复提供。
+     */
     val eyeCareWarmth: Float = 0f,
-    /** null 表示跟随系统亮度 */
-    val brightness: Float? = null,
     // —— 阅读辅助 ——
-    val autoReadSpeed: Int = 28,
+    /**
+     * 自动阅读的**每页停留秒数**。
+     *
+     * 早先这里存的是「字/秒」，再由「本页字数 ÷ 速度」算出停留时长。
+     * 那个做法的问题是：停留时间随页面长短浮动，用户没法预期下一页几时翻，
+     * 想「定一个节奏让它自己翻」这个需求反而落空了。
+     * 现在直接设定秒数，节奏是确定的。
+     */
+    val autoReadSecondsPerPage: Int = 9,
     val ttsRate: Float = 1.0f,
     val ttsPitch: Float = 1.0f,
     val keepScreenOn: Boolean = false,
@@ -94,10 +108,15 @@ class SettingsStore(private val context: Context) {
         val indent = floatPreferencesKey("indent_em")
         val letterSpacing = floatPreferencesKey("letter_spacing_em")
         val eyeCare = floatPreferencesKey("eye_care_warmth")
-        val brightness = floatPreferencesKey("brightness")
-        /** 用独立布尔位表示「亮度是否跟随系统」，因为 DataStore 无法存 null */
-        val brightnessFollowSystem = booleanPreferencesKey("brightness_follow_system")
-        val autoReadSpeed = intPreferencesKey("auto_read_speed")
+        /**
+         * 亮度相关键已废弃（`brightness` / `brightness_follow_system`）。
+         *
+         * 键名与旧数据刻意**保留不删**：DataStore 是持久化的，
+         * 老用户升级上来时旧键还在文件里，删掉常量不影响读取，
+         * 但保留注释能让人明白「为什么这里少了两个键」，
+         * 避免后来者以为是不小心漏了又加回去。
+         */
+        val autoReadSeconds = intPreferencesKey("auto_read_seconds_per_page")
         val ttsRate = floatPreferencesKey("tts_rate")
         val ttsPitch = floatPreferencesKey("tts_pitch")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
@@ -113,7 +132,6 @@ class SettingsStore(private val context: Context) {
     val settings: Flow<ReaderSettings> = store.data.map { prefs -> prefs.toSettings() }
 
     private fun Preferences.toSettings(): ReaderSettings {
-        val followSystem = this[Keys.brightnessFollowSystem] ?: true
         return ReaderSettings(
             theme = enumOrDefault(this[Keys.theme], ThemeId.PAPER),
             pageMode = enumOrDefault(this[Keys.pageMode], PageMode.SIMULATION),
@@ -127,8 +145,7 @@ class SettingsStore(private val context: Context) {
             indentEm = this[Keys.indent] ?: 2f,
             letterSpacingEm = this[Keys.letterSpacing] ?: 0.012f,
             eyeCareWarmth = this[Keys.eyeCare] ?: 0f,
-            brightness = if (followSystem) null else (this[Keys.brightness] ?: 0.7f),
-            autoReadSpeed = this[Keys.autoReadSpeed] ?: 28,
+            autoReadSecondsPerPage = this[Keys.autoReadSeconds] ?: 9,
             ttsRate = this[Keys.ttsRate] ?: 1.0f,
             ttsPitch = this[Keys.ttsPitch] ?: 1.0f,
             keepScreenOn = this[Keys.keepScreenOn] ?: false,
@@ -177,17 +194,14 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setEyeCare(warmth: Float) = store.edit { it[Keys.eyeCare] = warmth.coerceIn(0f, 1f) }
 
-    suspend fun setBrightness(value: Float) {
-        store.edit {
-            it[Keys.brightnessFollowSystem] = false
-            it[Keys.brightness] = value.coerceIn(0.15f, 1f)
-        }
-    }
-
-    suspend fun followSystemBrightness() = store.edit { it[Keys.brightnessFollowSystem] = true }
-
-    suspend fun setAutoReadSpeed(charsPerSecond: Int) =
-        store.edit { it[Keys.autoReadSpeed] = charsPerSecond.coerceIn(4, 200) }
+    /**
+     * 自动阅读的每页停留秒数。
+     *
+     * 下限 2 秒：再快的话页面刚出现就翻走了，实际上看不清任何内容，
+     * 那不是「自动阅读」而是快速翻页。上限 120 秒足够覆盖慢读。
+     */
+    suspend fun setAutoReadSeconds(seconds: Int) =
+        store.edit { it[Keys.autoReadSeconds] = seconds.coerceIn(2, 120) }
 
     suspend fun setTtsRate(rate: Float) = store.edit { it[Keys.ttsRate] = rate.coerceIn(0.5f, 2f) }
 

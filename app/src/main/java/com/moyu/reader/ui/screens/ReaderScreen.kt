@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -127,6 +128,25 @@ fun ReaderScreen(
 
     var chromeVisible by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(ReaderSheet.NONE) }
+
+    /**
+     * 返回层级：先关面板 → 再关工具栏 → 最后才退出阅读页。
+     *
+     * 不做这件事的话，返回手势/返回键会**直接 pop 掉整个阅读页**，
+     * 哪怕用户只是想关掉刚打开的目录面板。这对「从左边滑一下」的
+     * 边缘手势尤其明显：手还在屏幕上，人已经回到书架了。
+     *
+     * 用 `enabled` 控制拦截时机而不是在回调里判断要不要拦截：
+     * 只有在「确实有东西可关」时才拦截，否则放行给系统，
+     * 这样没有面板时返回手势的手感与系统完全一致。
+     */
+    val hasSomethingToClose = sheet != ReaderSheet.NONE || chromeVisible
+    androidx.activity.compose.BackHandler(enabled = hasSomethingToClose) {
+        when {
+            sheet != ReaderSheet.NONE -> sheet = ReaderSheet.NONE
+            chromeVisible -> chromeVisible = false
+        }
+    }
 
     val palette = moyuPalette()
     val chapterContent = chapter?.content.orEmpty()
@@ -441,7 +461,7 @@ fun ReaderScreen(
                     .padding(horizontal = 14.dp, vertical = 7.dp),
             ) {
                 Text(
-                    text = "自动阅读中 · ${settings.autoReadSpeed} 字/秒",
+                    text = "自动阅读中 · ${settings.autoReadSecondsPerPage} 秒/页",
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.textSecondary,
                 )
@@ -486,6 +506,62 @@ private fun PagedReader(
         pageStart.coerceIn(0, content.length),
         pageEnd.coerceIn(0, content.length),
     )
+
+    /**
+     * 地脚高度固定。
+     *
+     * 正文区是 `weight(1f)`，分到的是「本 Column 扣掉其他子项之后」的空间。
+     * 地脚若随内容变化（电量从 100% 变 99%、时间从 9:59 变 10:00），
+     * 正文区高度就会跟着变，触发重新分页 —— 用户会看到读到一半突然重排。
+     * 固定高度之后测量值稳定，分页也稳定。
+     */
+    val footerHeight = 26.dp
+
+    // —— 地脚的时钟：每分钟更新一次即可，不必每秒 ——
+    //
+    // 用 remember + LaunchedEffect(delay 到下一分钟) 而不是每秒轮询：
+    // 秒级刷新会让整个阅读页每秒重组一次，白白耗电。
+    var clockText by remember { mutableStateOf(currentClockText()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            // 对齐到下一个整分钟再刷新，避免 59 秒后才更新的迟滞感
+            val now = java.util.Calendar.getInstance()
+            val msToNextMinute = (60 - now.get(java.util.Calendar.SECOND)) * 1000L -
+                now.get(java.util.Calendar.MILLISECOND)
+            kotlinx.coroutines.delay(msToNextMinute.coerceAtLeast(1000L))
+            clockText = currentClockText()
+        }
+    }
+
+    // —— 电量：ACTION_BATTERY_CHANGED 是 sticky intent，注册即回调 ——
+    //
+    // 用它而不是 BatteryManager 的 getIntProperty：后者同样无需权限，
+    // 但拿不到「电量变化」的推送，只能轮询。sticky 广播既不轮询也不需要权限。
+    val context = LocalContext.current
+    var batteryPercent by remember { mutableIntStateOf(-1) }
+    DisposableEffect(context, settings.showStatusBar) {
+        if (!settings.showStatusBar) {
+            onDispose { }
+        } else {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
+                    val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+                    batteryPercent =
+                        if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+                }
+            }
+            val filter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+            // Android 14+ 要求显式声明是否导出，否则注册会抛异常
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+            onDispose { runCatching { context.unregisterReceiver(receiver) } }
+        }
+    }
 
     // 翻页动画：以 flipToken 为 key 重新触发一次入场动画
     var entered by remember(flipToken) { mutableStateOf(false) }
@@ -610,20 +686,47 @@ private fun PagedReader(
                 }
             }
 
-            // —— 地脚：页码居中 ——
-            // 真书的页码只是一个数字，不带章节名、不带百分比。
-            // 「还有多久读完」交给下面那条贴页缘的细线 —— 它不占版心。
-            if (settings.showPageNumber) {
-                Text(
-                    text = pageNumber.toString(),
-                    style = furnitureStyle,
-                    color = palette.textSecondary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp)
-                        .alpha(0.85f),
-                )
+            // —— 地脚：左页码、右时间与电量 ——
+            //
+            // 高度固定为 FOOTER_HEIGHT，并且**高度不随内容变化**：
+            // 正文区是 weight(1f)，它拿到的是「本 Column 扣掉其他子项之后」的空间。
+            // 地脚高度一旦随内容跳动（例如电量数字从 100 变 99），
+            // 正文区高度就会跟着变，于是触发重新分页 —— 表现为读到一半突然重排。
+            // 给死高度后，测量值稳定，分页也就稳定。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(footerHeight)
+                    .padding(top = 10.dp),
+            ) {
+                if (settings.showPageNumber) {
+                    Text(
+                        text = pageNumber.toString(),
+                        style = furnitureStyle,
+                        color = palette.textSecondary,
+                        modifier = Modifier.align(Alignment.CenterStart).alpha(0.85f),
+                    )
+                }
+                Row(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = clockText,
+                        style = furnitureStyle,
+                        color = palette.textSecondary,
+                        modifier = Modifier.alpha(0.85f),
+                    )
+                    if (settings.showStatusBar) {
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            text = if (batteryPercent >= 0) "${batteryPercent}%" else "--",
+                            style = furnitureStyle,
+                            color = palette.textSecondary,
+                            modifier = Modifier.alpha(0.85f),
+                        )
+                    }
+                }
             }
         }
 
@@ -718,7 +821,23 @@ private fun buildPageText(
     return builder.toAnnotatedString()
 }
 
-/** 正文文本样式。分页计算与实际渲染必须用同一套参数。 */
+/**
+ * 正文文本样式。分页计算与实际渲染必须用同一套参数。
+ *
+ * `includeFontPadding = false` 与 `PaginationEngine.buildLayout` 里的
+ * `setIncludePad(false)` 是**成对**的，缺一边就会出错：
+ *
+ * Compose 的 `Text` 默认包含字体 padding（字形上下留白），而 StaticLayout
+ * 那边不含。两侧不一致时，分页量出的高度比实际渲染的小，
+ * 真机上表现为「最后一行被裁掉、只剩字顶一点」。
+ *
+ * 更隐蔽的是它**只在某些字体度量下才暴露**：正文行高是
+ * `fontSize × 行距倍数`（默认约 1.7 倍字号），比字体自然行高大不少，
+ * 于是差异经常被掩盖过去。一旦用户把行距调到 1.0 附近，
+ * 被掩盖的量就不够了 —— 报障现象正是这样出现的。
+ *
+ * 两侧都关掉字体 padding 后，行盒就等于「行高」，不再依赖字体度量的巧合。
+ */
 private fun bodyTextStyle(settings: com.moyu.reader.data.prefs.ReaderSettings): TextStyle = TextStyle(
     fontFamily = fontFamilyFor(settings.fontFamily),
     fontSize = settings.fontSizeSp.sp,
@@ -726,6 +845,7 @@ private fun bodyTextStyle(settings: com.moyu.reader.data.prefs.ReaderSettings): 
     letterSpacing = settings.letterSpacingEm.sp,
     fontWeight = if (settings.bold) FontWeight.Medium else FontWeight.Normal,
     textAlign = if (settings.justify) TextAlign.Justify else TextAlign.Start,
+    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
 )
 
 /** 滚动阅读模式。 */
@@ -767,9 +887,21 @@ private fun ScrollReader(
     }
 }
 
+/**
+ * 地脚显示的当前时间，形如 `14:05`。
+ *
+ * 用 24 小时制而不是跟随系统设置：地脚宽度固定，`下午 2:05` 这种带前缀的
+ * 格式会明显更宽，在窄屏上容易与左侧页码挤在一起。
+ */
+private fun currentClockText(): String {
+    val now = java.util.Calendar.getInstance()
+    val h = now.get(java.util.Calendar.HOUR_OF_DAY)
+    val m = now.get(java.util.Calendar.MINUTE)
+    return String.format("%02d:%02d", h, m)
+}
+
 /** 章节序号标签。楔子/番外等特殊篇名不编号。 */
-private fun chapterNumberLabel(title: String, index: Int): String {
-    val special = Regex("^(楔子|序章|序言|自序|前言|引子|引言|尾声|终章|完结章|后记|附录|外传|作者的话|作品相关|设定|人物介绍|番外)")
+private fun chapterNumberLabel(title: String, index: Int): String {    val special = Regex("^(楔子|序章|序言|自序|前言|引子|引言|尾声|终章|完结章|后记|附录|外传|作者的话|作品相关|设定|人物介绍|番外)")
     if (special.containsMatchIn(title.trim())) return "篇外"
     if (Regex("第\\s*[0-9零一二三四五六七八九十百千万两〇]+\\s*[章节回卷节篇部集话]").containsMatchIn(title)) return "正文"
     if (Regex("^(chapter|chap\\.?|part)\\b", RegexOption.IGNORE_CASE).containsMatchIn(title)) return "正文"

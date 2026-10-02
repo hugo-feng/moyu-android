@@ -49,9 +49,17 @@ object PaginationEngine {
         /** 指定页能容纳的行数。 */
         fun linesFor(isFirstPage: Boolean): Int {
             if (lineHeight <= 0) return 1
-            val usable = if (isFirstPage) contentHeight - firstPageHeaderHeight else contentHeight
-            return maxOf(1, usable / lineHeight)
+            return maxOf(1, contentHeightFor(isFirstPage) / lineHeight)
         }
+
+        /**
+         * 指定页真正可用的高度。
+         *
+         * 章首页要扣掉标题块；其余页不扣。
+         * 分页不仅按行数约束，还要按这个高度二次校验（见 `paginate` 的回退逻辑）。
+         */
+        fun contentHeightFor(isFirstPage: Boolean): Int =
+            if (isFirstPage) (contentHeight - firstPageHeaderHeight).coerceAtLeast(1) else contentHeight
     }
 
     /**
@@ -95,6 +103,21 @@ object PaginationEngine {
         val textSize = paint.textSize.coerceAtLeast(1f)
         val charsPerLine = maxOf(1, (width / textSize).toInt())
 
+        /**
+         * 探测切片的长度（字符数）。
+         *
+         * 这个值的唯一作用是「别对两万字的章节做全量排版」，**绝不能**小到
+         * 反过来限制判断 —— 早期版本取 `maxLines * charsPerLine * 2`，
+         * 结果切片短于真实可用行数，`layout.lineCount` 顶到的是**切片的行数**
+         * 而不是可用行数，于是「整段放得下」这个判断永远成立：
+         * 实测表现为分页在第一页就结束，整章被当成一页排出去，底部一大截被裁掉。
+         *
+         * 现在取一个与行数无关的固定上限：足够容纳一页（一般 30~150 行、
+         * 每行至多百余字符），又不至于接近整章长度。
+         * 关键是它**只用于省时间，不参与任何判断**（判断一律看实测高度）。
+         */
+        val probeChars = 8192
+
         while (start < content.length) {
             // 防止病态输入导致死循环：迭代上限与文本长度成正比
             if (guard++ > maxIterations) break
@@ -107,27 +130,62 @@ object PaginationEngine {
              */
             val isFirstPage = pages.isEmpty()
             val maxLines = maxLinesOverride ?: metrics.linesFor(isFirstPage)
+            val availableHeight = metrics.contentHeightFor(isFirstPage)
 
             val remaining = content.substring(start)
-            // 只排版当前页可能容纳的量（maxLines 行），避免对超长章节做无谓的全量排版
-            val probeChars = (maxLines * charsPerLine * 2).coerceAtLeast(maxLines * 4)
             val probeLength = minOf(remaining.length, probeChars)
             val slice = remaining.substring(0, probeLength)
 
             val layout = buildLayout(slice, width, paint)
 
-            // 整段都放得下：这一页到章末
-            if (layout.lineCount <= maxLines) {
-                pages.add(Page(pages.size, start, content.length))
-                break
+            /**
+             * 判定「这一页能放多少」，**只看实际高度**，不看行号推算。
+             *
+             * 之所以不用 `layout.lineCount <= maxLines` 来判断整段是否放得下：
+             * 那个行数是在**探测切片**上量出来的。切片若被截短，行数就被人为压低，
+             * 判断随之失真。而高度是切片真实排版出来的结果，切片本身已经
+             * 取得足够长（见 probeChars），因此它可靠得多。
+             */
+            if (layout.height <= availableHeight) {
+                // 探测切片本身就装得下。若切片已覆盖到章末，这一页就是最后一页；
+                // 否则说明切片还没取完但已够一页 —— 仍然以整段切片为界，
+                // 因为它的高度确实没超。
+                pages.add(Page(pages.size, start, start + probeLength))
+                start += probeLength
+                if (probeLength >= remaining.length) break
+                continue
             }
 
-            // 第 maxLines 行的行尾即本页边界。注意行号从 0 开始，
-            // 因此「第 maxLines 行」的索引是 maxLines - 1。
-            val endInSlice = layout.getLineEnd(maxLines - 1)
+            /**
+             * 装不下：从能放的最后一行往前退，直到**实测高度**确实装得进为止。
+             *
+             * 起始行数取 `min(lineCount, maxLines) - 1`：
+             * 先按行数上限猜一个位置，再用高度校验它。两者取较小值，
+             * 是因为高度与行数都可能成为约束（行距小的时候是高度先到，
+             * 行距大的时候是行数先到）。
+             *
+             * 终止条件必须**同时**保证两件事：
+             *   1. 不会无限循环 —— 每轮 lines 严格递减，且 lines 降到 0 就停；
+             *   2. 每页至少前进一个字符 —— 即使某一行本身就高过容器
+             *      （极端大字号），也要保证 `endInSlice` 落到第一行行尾而不是 0，
+             *      否则整个分页会卡住。下面的 `lineEndAtLeastOneLine` 就是为此。
+             */
+            var lines = (minOf(layout.lineCount, maxLines) - 1).coerceAtLeast(0)
+            var endInSlice = lineEndAtLeastOneLine(layout, lines)
+            var endLayout = buildLayout(slice.substring(0, endInSlice), width, paint)
+
+            while (endLayout.height > availableHeight && lines > 0) {
+                lines--
+                endInSlice = lineEndAtLeastOneLine(layout, lines)
+                endLayout = buildLayout(slice.substring(0, endInSlice), width, paint)
+            }
+
             var end = start + endInSlice
 
-            // 边界保护：必须至少前进 1 个字符，否则会死循环
+            // 双保险：无论如何都要前进，否则外层 while 会空转
+            if (end <= start) {
+                end = minOf(start + lineEndAtLeastOneLine(layout, 0), content.length)
+            }
             if (end <= start) end = minOf(start + 1, content.length)
 
             pages.add(Page(pages.size, start, end))
@@ -143,6 +201,15 @@ object PaginationEngine {
      *
      * 用 Builder 而不是已废弃的构造函数：API 23+ 的 Builder 才能正确设置
      * breakStrategy / hyphenation，否则 Android 10+ 上会收到废弃警告且断行行为不一致。
+     *
+     * `setIncludePad(false)` 必须与渲染侧的 `includeFontPadding = false` **成对出现**。
+     *
+     * 这是真机上「正文最后一行被裁掉、只剩字顶」的根因：
+     * 这里本来就不含字体 padding，而 Compose 的 `Text` **默认包含**。
+     * 同一段文字于是「量出来矮、画出来高」，最后一行越过底边被裁。
+     * 早先靠把行高估大（fontSize × 行距倍数，比字体自然行高大约 30%）
+     * 侥幸掩盖了这个差异，但它依赖字体度量恰好落在某个范围 ——
+     * 换字体或换字号就可能失效，不能算修好。两侧口径一致才是正解。
      */
     private fun buildLayout(text: String, width: Int, paint: TextPaint): StaticLayout =
         StaticLayout.Builder
@@ -155,6 +222,19 @@ object PaginationEngine {
             .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
+
+    /**
+     * 取第 `line` 行的行尾，但**至少保证第一行**。
+     *
+     * 为什么需要下限：如果某个单行本身就高过容器（超大字号 + 极矮视口），
+     * 回退循环会一路退到 0 行，`getLineEnd(0)` 之外就没有可用的边界了。
+     * 那时若不兜底，这一页的字符数会变成 0，外层循环再也不前进 —— 分页卡死。
+     * 宁可让这一行被裁（用户能立刻看出字号太大），也不能让应用卡住。
+     */
+    private fun lineEndAtLeastOneLine(layout: StaticLayout, line: Int): Int {
+        val safeLine = line.coerceIn(0, (layout.lineCount - 1).coerceAtLeast(0))
+        return layout.getLineEnd(safeLine).coerceAtLeast(1)
+    }
 
     /** 二分查找：给定章内字符偏移，返回它所在的页序号。 */
     fun pageIndexForOffset(pages: List<Page>, offset: Int): Int {

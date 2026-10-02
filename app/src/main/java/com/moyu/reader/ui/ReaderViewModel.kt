@@ -222,9 +222,10 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             append(prefs.indentEm).append('|')
             append(prefs.letterSpacingEm).append('|')
             append(viewport.first).append('x').append(viewport.second).append('|')
-            // 正文区实测高度与章首页标题高度都必须进缓存键：
-            // 它们决定每页能放几行，变了却不重排就会少字或被裁。
-            append(contentBoxHeight).append('|').append(firstPageHeaderHeight)
+            // 正文区实测的宽与高、以及章首页标题高度，都必须进缓存键：
+            // 它们决定每页放几行、每行放几字，变了却不重排就会少字或被裁。
+            append(contentBoxWidth).append('|').append(contentBoxHeight).append('|')
+            append(firstPageHeaderHeight)
         }
         if (!force && key == lastPageKey) return
         lastPageKey = key
@@ -245,8 +246,22 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         val measuredHeight = contentBoxHeight
             ?: (viewport.second - marginPx * 0.9f - _insets.first - _insets.second).toInt()
 
+        /**
+         * 横向可用宽度同样必须用实测值。
+         *
+         * 这里曾经写的是 `viewport.first - marginPx * 2` —— 而 `viewport`
+         * 是**根布局**的尺寸，页边距已经在根布局上以 padding 的形式扣掉了。
+         * 再扣一次等于把页边距算了双份：小米 14 上（1080px 宽、margin 48dp、
+         * density 3）实际版心约 948px，却被当成 748px —— 窄了 21%，
+         * 每行少放 3~4 个字，而且断行位置与真实排版不一致。
+         *
+         * 教训与高度那处完全一样：**凡是能从渲染侧实测的，就不要推算**。
+         */
+        val measuredWidth = contentBoxWidth
+            ?: (viewport.first - marginPx * 2).toInt()
+
         val metrics = PaginationEngine.Metrics(
-            contentWidth = (viewport.first - marginPx * 2).toInt().coerceAtLeast(1),
+            contentWidth = measuredWidth.coerceAtLeast(1),
             contentHeight = measuredHeight.coerceAtLeast(1),
             lineHeight = lineHeightPx.toInt().coerceAtLeast(1),
             firstPageHeaderHeight = firstPageHeaderHeight,
@@ -283,6 +298,15 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
      */
     private var contentBoxHeight: Int? = null
 
+    /**
+     * 正文区的**实测**宽度（像素）。
+     *
+     * 与高度同理：宽度也不能用「视口宽 − 页边距 × 2」推算 ——
+     * 视口本身已经被根布局扣过页边距，再扣一次会让版心窄约 21%，
+     * 每行少放 3~4 个字，且断行位置与真实渲染不一致。
+     */
+    private var contentBoxWidth: Int? = null
+
     /** 章首页标题块（章节序号 + 大标题）的实测高度，只有第一页要扣。 */
     private var firstPageHeaderHeight: Int = 0
 
@@ -303,9 +327,10 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
      * 不会再出现「分页按 28 行排、版心只装得下 26 行」这类少字问题。
      */
     fun setContentBoxSize(widthPx: Int, heightPx: Int, density: Density) {
-        if (heightPx <= 0) return
-        if (contentBoxHeight == heightPx) return
+        if (heightPx <= 0 || widthPx <= 0) return
+        if (contentBoxHeight == heightPx && contentBoxWidth == widthPx) return
         contentBoxHeight = heightPx
+        contentBoxWidth = widthPx
         recomputePagination(density)
     }
 
@@ -596,8 +621,12 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     /**
      * 切换自动阅读。
      *
-     * 节奏按「本页字符数 ÷ 每秒字数」计算，因此长页停留久、短页停留短，
-     * 观感比固定间隔自然得多。下限 1.2 秒，避免极短页闪得眼花。
+     * 节奏是**固定的每页秒数**（用户在设置里直接设定），不随页面长短浮动。
+     *
+     * 早先按「本页字符数 ÷ 每秒字数」算，长页停得久、短页停得短。
+     * 那个做法的出发点是「观感自然」，但实际用起来是反的：
+     * 用户想的是「设个节奏让它自己翻」，结果每一页要等多久完全无法预期，
+     * 短页一闪而过、长页又像卡住了。所以改回确定的秒数。
      */
     fun toggleAutoRead(density: Density) {
         if (_autoReading.value) {
@@ -607,11 +636,8 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         _autoReading.value = true
         autoReadJob = scope.launch {
             while (_autoReading.value) {
-                val page = _pages.value.getOrNull(_pageIndex.value) ?: break
-                val chars = (page.end - page.start).coerceAtLeast(1)
-                val speed = _settings.value.autoReadSpeed.coerceAtLeast(4)
-                val delayMs = ((chars.toFloat() / speed) * 1000).toLong().coerceAtLeast(1200)
-                delay(delayMs)
+                val seconds = _settings.value.autoReadSecondsPerPage.coerceIn(2, 120)
+                delay(seconds * 1000L)
 
                 if (!_autoReading.value) break
 

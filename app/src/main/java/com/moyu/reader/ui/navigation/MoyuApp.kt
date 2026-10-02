@@ -269,7 +269,9 @@ private fun MoyuBottomBar(
                 .fillMaxWidth()
                 .height(58.dp)
                 .padding(bottom = 2.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            // 等分由下面每个 item 的 Modifier.weight(1f) 负责，
+            // 这里不再叠加 Arrangement.SpaceEvenly / SpaceBetween ——
+            // 两者一起用会让间距与权重互相抵消，宽屏上尤其明显。
             verticalAlignment = Alignment.CenterVertically,
         ) {
             items.forEach { (route, label, icon) ->
@@ -278,24 +280,36 @@ private fun MoyuBottomBar(
                     icon = icon,
                     active = currentRoute == route,
                     onClick = { onSelect(route) },
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
     }
 }
 
+/**
+ * 底部标签项。
+ *
+ * `modifier` 由调用方传入 `Modifier.weight(1f)` —— **必须**这样等分，
+ * 不能在内部写 `fillMaxWidth(0.25f)`。
+ *
+ * 那个写法看起来像「占四分之一宽」，实际是「占**父容器当前可用空间**的 25%」。
+ * Row 里前一个 item 已经占掉一部分，后一个的可用空间就变小了，
+ * 于是四个标签宽度依次递减（实测约 25% / 19% / 14% / 11%）。
+ * 标签数量从 4 个变成 5 个时，分母写死 0.25 还会直接算错。
+ */
 @Composable
 private fun BottomBarItem(
     label: String,
     icon: ImageVector,
     active: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
     val tint = if (active) palette.primary else palette.textSecondary
     Column(
-        modifier = Modifier
-            .fillMaxWidth(0.25f)
+        modifier = modifier
             .height(56.dp)
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -311,6 +325,7 @@ private fun BottomBarItem(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = tint,
+            maxLines = 1,
             modifier = Modifier.padding(top = 2.dp),
         )
     }

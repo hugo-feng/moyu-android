@@ -16,6 +16,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.FolderDelete
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -30,20 +38,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moyu.reader.data.prefs.PageMode
 import com.moyu.reader.data.prefs.ThemeId
 import com.moyu.reader.ui.SettingsViewModel
-import com.moyu.reader.ui.components.MoyuChip
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.MoyuTopBar
-import com.moyu.reader.ui.components.SegmentedControl
 import com.moyu.reader.ui.components.SettingDivider
 import com.moyu.reader.ui.components.SettingRow
 import com.moyu.reader.ui.theme.moyuPalette
-import com.moyu.reader.ui.theme.fontDisplayName
 import com.moyu.reader.ui.theme.paletteFor
 import com.moyu.reader.ui.theme.themeDisplayName
 
@@ -63,15 +70,50 @@ fun SettingsScreen(
     val palette = moyuPalette()
 
     var confirmClear by remember { mutableStateOf(false) }
+    /** 当前打开的二级页；null 表示停在一级分类列表。 */
+    var page by remember { mutableStateOf<SettingsPage?>(null) }
 
     LaunchedEffect(Unit) { viewModel.loadDictionaries() }
+
+    // ================= 一级：分类入口 =================
+    if (page == null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.surface),
+        ) {
+            MoyuTopBar(title = "设置", onBack = onBack)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(top = 8.dp, bottom = 30.dp),
+            ) {
+                Text(
+                    text = "所有设置都即时生效，没有「保存」按钮。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+                )
+                SettingsPage.entries.forEach { entry ->
+                    CategoryCard(
+                        title = entry.title,
+                        summary = entry.summary(settings, dictionaries.size),
+                        icon = entry.icon,
+                        onClick = { page = entry },
+                    )
+                }
+            }
+        }
+        return
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(palette.surface),
     ) {
-        MoyuTopBar(title = "设置", onBack = onBack)
+        MoyuTopBar(title = page!!.title, onBack = { page = null })
 
         Column(
             modifier = Modifier
@@ -80,6 +122,7 @@ fun SettingsScreen(
                 .padding(bottom = 30.dp),
         ) {
             // ================= 外观 =================
+            if (page == SettingsPage.APPEARANCE) {
             GroupTitle("外观")
 
             Row(
@@ -126,139 +169,59 @@ fun SettingsScreen(
                 },
             )
             SettingDivider()
-
-            SliderRow(
+            SettingRow(
                 label = "护眼色温",
-                valueText = if (settings.eyeCareWarmth == 0f) "关闭" else "${(settings.eyeCareWarmth * 100).toInt()}%",
+                hint = "整体偏暖，夜间阅读更柔和",
+                trailing = {
+                    Text(
+                        text = if (settings.eyeCareWarmth == 0f) "关闭" else "${(settings.eyeCareWarmth * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                    )
+                },
+            )
+            SliderRow(
+                label = "",
+                valueText = "",
                 value = settings.eyeCareWarmth,
                 range = 0f..1f,
                 onValueChange = { viewModel.setEyeCare(it) },
             )
-            SliderRow(
-                label = "屏幕亮度",
-                valueText = settings.brightness?.let { "${(it * 100).toInt()}%" } ?: "跟随系统",
-                value = settings.brightness ?: 1f,
-                range = 0.15f..1f,
-                onValueChange = { viewModel.setBrightness(it) },
-                trailing = {
-                    MoyuTextButton(
-                        text = if (settings.brightness == null) "调节" else "跟随",
-                        onClick = {
-                            if (settings.brightness == null) viewModel.setBrightness(0.7f)
-                            else viewModel.followSystemBrightness()
-                        },
-                    )
-                },
-            )
-
-            // ================= 阅读 =================
-            GroupTitle("阅读")
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                com.moyu.reader.data.prefs.FontFamilyId.entries.forEach { font ->
-                    MoyuChip(
-                        text = fontDisplayName(font),
-                        active = settings.fontFamily == font,
-                        onClick = { viewModel.setFontFamily(font) },
-                    )
-                }
             }
 
-            StepperRow(
-                label = "正文字号",
-                value = "${settings.fontSizeSp}px",
-                onMinus = { viewModel.setFontSize(settings.fontSizeSp - 1) },
-                onPlus = { viewModel.setFontSize(settings.fontSizeSp + 1) },
-            )
-            StepperRow(
-                label = "行距",
-                value = String.format("%.1f", settings.lineHeightMultiplier),
-                onMinus = { viewModel.setLineHeight(settings.lineHeightMultiplier - 0.1f) },
-                onPlus = { viewModel.setLineHeight(settings.lineHeightMultiplier + 0.1f) },
-            )
-            StepperRow(
-                label = "段间距",
-                value = String.format("%.1f", settings.paragraphSpacingMultiplier),
-                onMinus = { viewModel.setParagraphSpacing(settings.paragraphSpacingMultiplier - 0.2f) },
-                onPlus = { viewModel.setParagraphSpacing(settings.paragraphSpacingMultiplier + 0.2f) },
-            )
-            StepperRow(
-                label = "页边距",
-                value = "${settings.marginDp}px",
-                onMinus = { viewModel.setMargin(settings.marginDp - 2) },
-                onPlus = { viewModel.setMargin(settings.marginDp + 2) },
-            )
-            StepperRow(
-                label = "首行缩进",
-                value = if (settings.indentEm == 0f) "无" else "${settings.indentEm.toInt()} 字",
-                onMinus = { viewModel.setIndent(settings.indentEm - 0.5f) },
-                onPlus = { viewModel.setIndent(settings.indentEm + 0.5f) },
-            )
+            // ================= 阅读习惯 =================
+            //
+            // 这里**刻意不放**字号、行距、段间距、页边距、首行缩进、两端对齐、
+            // 正文加粗、显示页码 —— 那些是「排版」，阅读页里点中间就能调，
+            // 边调边看效果。放在全局设置里第一个人不会来这里找，
+            // 第二个改完还得切回阅读页才能看到结果。两处重复只是噪音。
+            if (page == SettingsPage.READING) {
+            GroupTitle("阅读习惯")
 
             SettingRow(
-                label = "两端对齐",
-                trailing = { MoyuSwitch(settings.justify) { viewModel.setJustify(it) } },
-            )
-            SettingDivider()
-            SettingRow(
-                label = "正文加粗",
-                trailing = { MoyuSwitch(settings.bold) { viewModel.setBold(it) } },
-            )
-            SettingDivider()
-            SettingRow(
                 label = "阅读时常亮",
+                hint = "阅读时不让屏幕自动熄灭",
                 trailing = { MoyuSwitch(settings.keepScreenOn) { viewModel.setKeepScreenOn(it) } },
             )
             SettingDivider()
             SettingRow(
-                label = "显示页码",
-                trailing = { MoyuSwitch(settings.showPageNumber) { viewModel.setShowPageNumber(it) } },
-            )
-            SettingDivider()
-            SettingRow(
                 label = "音量键翻页",
+                hint = "用音量键翻上/下一页，单手时更方便",
                 trailing = { MoyuSwitch(settings.volumeKeyPaging) { viewModel.setVolumeKeyPaging(it) } },
             )
             SettingDivider()
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "翻页方式",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = palette.text,
-                    modifier = Modifier.width(84.dp),
-                )
-                SegmentedControl(
-                    options = listOf(
-                        PageMode.SIMULATION to "仿真",
-                        PageMode.SLIDE to "平移",
-                        PageMode.COVER to "覆盖",
-                        PageMode.SCROLL to "滚动",
-                    ),
-                    selected = settings.pageMode,
-                    onSelect = { viewModel.setPageMode(it) },
-                )
+            SliderRow(
+                label = "自动阅读节奏",
+                valueText = "${settings.autoReadSecondsPerPage} 秒/页",
+                value = settings.autoReadSecondsPerPage.toFloat(),
+                range = 2f..60f,
+                onValueChange = { viewModel.setAutoReadSeconds(it.toInt()) },
+            )
             }
 
-            SliderRow(
-                label = "自动阅读速度",
-                valueText = "${settings.autoReadSpeed} 字/秒",
-                value = settings.autoReadSpeed.toFloat(),
-                range = 8f..120f,
-                onValueChange = { viewModel.setAutoReadSpeed(it.toInt()) },
-            )
-
-            // ================= 朗读 =================
+            // ================= 朗读与词典 =================
+            if (page == SettingsPage.SPEECH) {
             GroupTitle("朗读（TTS）")
             SliderRow(
                 label = "语速",
@@ -279,7 +242,6 @@ fun SettingsScreen(
                 hint = "使用系统内置的语音合成，无需联网与额外权限",
             )
 
-            // ================= 词典 =================
             GroupTitle("词典")
             SettingRow(
                 label = "内置词典",
@@ -289,17 +251,6 @@ fun SettingsScreen(
                         text = "${viewModel.builtinDictionarySize} 条",
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.textSecondary,
-                    )
-                },
-            )
-            SettingDivider()
-            SettingRow(
-                label = "自定义词典",
-                hint = "每行一条：词条<TAB>拼音<TAB>释义",
-                trailing = {
-                    MoyuTextButton(
-                        text = "导入",
-                        onClick = { /* 由文件选择器处理，见 ImportScreen 的词典导入入口 */ },
                     )
                 },
             )
@@ -313,9 +264,12 @@ fun SettingsScreen(
                     },
                 )
             }
+            }
 
             // ================= 数据 =================
+            if (page == SettingsPage.DATA) {
             GroupTitle("数据")
+
             SettingRow(
                 label = "清除全部数据",
                 hint = "会删除所有书籍、进度、笔记与设置，不可恢复",
@@ -349,10 +303,15 @@ fun SettingsScreen(
                     MoyuTextButton(text = "取消", onClick = { confirmClear = false })
                 }
             }
+            }
 
             // ================= 关于 =================
+            if (page == SettingsPage.ABOUT) {
             GroupTitle("关于")
-            SettingRow(label = "墨阅 · 本地阅读器", hint = "版本 1.0.0")
+            SettingRow(
+                label = "墨阅 · 本地阅读器",
+                hint = "版本 ${com.moyu.reader.BuildConfig.VERSION_NAME}",
+            )
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                 Text(
                     text = "完全离线的本地阅读器：支持 TXT / EPUB / PDF，自动分章、按实际排版分页、" +
@@ -367,9 +326,100 @@ fun SettingsScreen(
                     color = palette.textSecondary,
                 )
             }
+            }
 
             Spacer(Modifier.height(20.dp))
         }
+    }
+}
+
+/** 设置页的一级分类。 */
+private enum class SettingsPage(val title: String, val icon: ImageVector) {
+    APPEARANCE("外观与主题", Icons.Filled.Palette),
+    READING("阅读习惯", Icons.Filled.AutoStories),
+    SPEECH("朗读与词典", Icons.Filled.RecordVoiceOver),
+    DATA("数据管理", Icons.Filled.FolderDelete),
+    ABOUT("关于", Icons.Filled.Info);
+
+    /**
+     * 分类入口右侧的当前值摘要。
+     *
+     * 只放**最常被确认的一两个值**，不是把所有设置列一遍 ——
+     * 列全了就退化成原来的长列表，分类也就白分了。
+     */
+    fun summary(
+        settings: com.moyu.reader.data.prefs.ReaderSettings,
+        dictionaryCount: Int,
+    ): String = when (this) {
+        APPEARANCE -> buildString {
+            append(themeDisplayName(settings.theme))
+            if (settings.followSystemDark) append(" · 跟随系统")
+            if (settings.eyeCareWarmth > 0f) append(" · 护眼 ${(settings.eyeCareWarmth * 100).toInt()}%")
+        }
+        READING -> buildString {
+            append("自动 ${settings.autoReadSecondsPerPage} 秒/页")
+            if (settings.volumeKeyPaging) append(" · 音量键翻页")
+            if (settings.keepScreenOn) append(" · 常亮")
+        }
+        SPEECH -> String.format("语速 %.1f× · 音调 %.1f · 词典 %d 部", settings.ttsRate, settings.ttsPitch, dictionaryCount)
+        DATA -> "清除全部本地数据"
+        ABOUT -> "版本 ${com.moyu.reader.BuildConfig.VERSION_NAME}"
+    }
+}
+
+/** 一级分类入口卡片。 */
+@Composable
+private fun CategoryCard(
+    title: String,
+    summary: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    val palette = moyuPalette()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 5.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(palette.card)
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(palette.primary.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = palette.primary, modifier = Modifier.size(20.dp))
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 13.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = palette.text,
+            )
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
+        Icon(
+            Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = palette.textSecondary,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -439,41 +489,3 @@ private fun SliderRow(
 
 private val NO_TRAILING: @Composable () -> Unit = {}
 
-@Composable
-private fun StepperRow(
-    label: String,
-    value: String,
-    onMinus: () -> Unit,
-    onPlus: () -> Unit,
-) {
-    val palette = moyuPalette()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = palette.text,
-            modifier = Modifier.weight(1f),
-        )
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(palette.card),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MoyuTextButton(text = "−", onClick = onMinus)
-            Text(
-                text = value,
-                style = MaterialTheme.typography.labelMedium,
-                color = palette.text,
-                modifier = Modifier.width(58.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
-            MoyuTextButton(text = "+", onClick = onPlus)
-        }
-    }
-}
