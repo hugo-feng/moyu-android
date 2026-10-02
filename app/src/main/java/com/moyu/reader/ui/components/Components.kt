@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.moyu.reader.ui.safeDrawingTopPadding
 import com.moyu.reader.ui.theme.moyuPalette
 
 /**
@@ -45,7 +46,13 @@ import com.moyu.reader.ui.theme.moyuPalette
  * 如果让每个屏幕各自实现一遍按钮和分组标题，几周后必然出现四五种圆角。
  */
 
-/** 顶部栏。左/中/右三段式，中间标题居中。 */
+/**
+ * 顶部栏。左/中/右三段式，中间标题居中。
+ *
+ * insets 处理：背景色铺到状态栏底下（保持边到边的沉浸感），
+ * 但内容整体下移一个状态栏高度 —— 否则标题会被状态栏/挖孔压住。
+ * 顺序是「先背景、后 padding」，反过来会在状态栏处留一条透明缝。
+ */
 @Composable
 fun MoyuTopBar(
     title: String,
@@ -57,8 +64,9 @@ fun MoyuTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
             .background(palette.surface)
+            .safeDrawingTopPadding()
+            .height(52.dp)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

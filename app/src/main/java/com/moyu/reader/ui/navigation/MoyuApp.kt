@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.navigation
+package com.moyu.reader.ui.navigation
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -38,9 +38,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.moyu.reader.data.prefs.ReaderSettings
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.SettingsViewModel
+import com.moyu.reader.ui.safeDrawingBottomPadding
 import com.moyu.reader.ui.screens.ImportScreen
 import com.moyu.reader.ui.screens.NotesScreen
 import com.moyu.reader.ui.screens.ReaderScreen
@@ -77,7 +77,6 @@ object Routes {
 
 @Composable
 fun MoyuApp(
-    settings: ReaderSettings,
     settingsViewModel: SettingsViewModel,
     factory: MoyuViewModelFactory,
 ) {
@@ -89,10 +88,25 @@ fun MoyuApp(
     val showBottomBar = currentRoute in setOf(Routes.SHELF, Routes.STATS, Routes.NOTES, Routes.SETTINGS)
 
     Box(modifier = Modifier.fillMaxSize()) {
+        /**
+         * 导航内容**按底栏高度留出下边距**，而不是让底栏盖在内容上。
+         *
+         * 早先底栏是覆盖式的（Box 里 align 到底部），列表最后一项会被压在
+         * 底栏与手势条下面 —— 用户看到的就是「内容显示不全」。
+         * 底栏高度 = 1px 分隔线 + 58dp + 底部安全区，这里保持一致。
+         */
         NavHost(
             navController = navController,
             startDestination = Routes.SHELF,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (showBottomBar) {
+                        Modifier.safeDrawingBottomPadding().padding(bottom = 59.dp)
+                    } else {
+                        Modifier
+                    },
+                ),
         ) {
             composable(Routes.SHELF) {
                 ShelfScreen(
@@ -203,7 +217,14 @@ private fun MoyuBottomBar(
         Triple(Routes.SETTINGS, "设置", Icons.Filled.Settings),
     )
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // 背景先铺满到屏幕底边（含手势条区域），再把内容抬到安全区之上。
+            // 顺序不能反：先 padding 再 background 会在手势条处留一条透明缝。
+            .background(palette.surface)
+            .safeDrawingBottomPadding(),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -213,7 +234,6 @@ private fun MoyuBottomBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(palette.surface)
                 .height(58.dp)
                 .padding(bottom = 2.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,

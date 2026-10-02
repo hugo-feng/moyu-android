@@ -25,14 +25,33 @@ object PaginationEngine {
     /** 一页的字符区间（右开区间）。 */
     data class Page(val index: Int, val start: Int, val end: Int)
 
-    /** 排版度量。 */
+    /**
+     * 排版度量。
+     *
+     * `contentHeight` 是**正文区**的真实高度（已扣掉页边距、系统栏安全区与地脚页码）。
+     * `firstPageHeaderHeight` 是章首页额外占用的标题块高度（章节序号 + 大标题）；
+     * 只有第一页要扣它，其余页不扣。
+     *
+     * 为什么要把标题单独拎出来：早先只有一个 `contentHeight`，
+     * 而章首页渲染时会多出一整块标题，分页却按「没有标题」的高度算行数，
+     * 于是首页多排 3 行、末行被裁掉 —— 用户不会发现自己少读了字，是最危险的一类错误。
+     * （每页的地脚页码高度已经含在 contentHeight 里，由渲染侧实测得到。）
+     */
     data class Metrics(
         val contentWidth: Int,
         val contentHeight: Int,
         val lineHeight: Int,
+        val firstPageHeaderHeight: Int = 0,
     ) {
-        /** 每页最多容纳的行数。 */
-        val maxLines: Int get() = if (lineHeight <= 0) 1 else maxOf(1, contentHeight / lineHeight)
+        /** 每页最多容纳的行数（不含章首页标题）。 */
+        val maxLines: Int get() = linesFor(isFirstPage = false)
+
+        /** 指定页能容纳的行数。 */
+        fun linesFor(isFirstPage: Boolean): Int {
+            if (lineHeight <= 0) return 1
+            val usable = if (isFirstPage) contentHeight - firstPageHeaderHeight else contentHeight
+            return maxOf(1, usable / lineHeight)
+        }
     }
 
     /**
@@ -56,20 +75,43 @@ object PaginationEngine {
         if (content.isEmpty()) return listOf(Page(0, 0, 0))
 
         val width = maxOf(1, metrics.contentWidth)
-        val maxLines = maxLinesOverride ?: metrics.maxLines
         val pages = ArrayList<Page>(content.length / 400 + 1)
 
         var start = 0
         var guard = 0
         val maxIterations = content.length / 4 + 64
 
+        /**
+         * 每行大约能放多少字。
+         *
+         * 这里曾经写成 `maxLines * width` —— 把**像素宽度当成了字符数**，
+         * 于是给 StaticLayout 的切片比实际需要大五六十倍（948px 宽、57px 字号
+         * 实际每行只放得下约 16 字，却被当成 948 字）。后果不是结果错误，
+         * 而是每一页都要对两万字做一次完整排版，翻页时明显卡顿。
+         *
+         * 中文按「一个字符约等于一个字号宽度」估算（与 Web 端分页口径一致）；
+         * 估多了只是多排一点，估少了才会出错，所以再乘一个安全系数。
+         */
+        val textSize = paint.textSize.coerceAtLeast(1f)
+        val charsPerLine = maxOf(1, (width / textSize).toInt())
+
         while (start < content.length) {
             // 防止病态输入导致死循环：迭代上限与文本长度成正比
             if (guard++ > maxIterations) break
 
+            /**
+             * 本页能放多少行。
+             *
+             * 章首页要额外扣掉标题块（章节序号 + 大标题）的高度，
+             * 其余页不扣 —— 否则首页会多排几行，末行被裁掉。
+             */
+            val isFirstPage = pages.isEmpty()
+            val maxLines = maxLinesOverride ?: metrics.linesFor(isFirstPage)
+
             val remaining = content.substring(start)
             // 只排版当前页可能容纳的量（maxLines 行），避免对超长章节做无谓的全量排版
-            val probeLength = minOf(remaining.length, maxLines * width)
+            val probeChars = (maxLines * charsPerLine * 2).coerceAtLeast(maxLines * 4)
+            val probeLength = minOf(remaining.length, probeChars)
             val slice = remaining.substring(0, probeLength)
 
             val layout = buildLayout(slice, width, paint)

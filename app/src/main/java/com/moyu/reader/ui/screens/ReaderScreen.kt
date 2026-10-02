@@ -1,7 +1,5 @@
 package com.moyu.reader.ui.screens
 
-import com.moyu.reader.ui.theme.moyuPalette
-
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -49,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -72,8 +71,10 @@ import com.moyu.reader.data.prefs.ThemeId
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.ReaderViewModel
 import com.moyu.reader.ui.components.IconAction
-import com.moyu.reader.ui.theme.moyuPalette
+import com.moyu.reader.ui.navigationBarHeightPx
+import com.moyu.reader.ui.statusBarHeightPx
 import com.moyu.reader.ui.theme.fontFamilyFor
+import com.moyu.reader.ui.theme.moyuPalette
 
 /**
  * 阅读器界面。
@@ -98,6 +99,9 @@ fun ReaderScreen(
     val viewModel: ReaderViewModel = viewModel(factory = factory)
     val density = LocalDensity.current
     val context = LocalContext.current
+    // 生命周期观察与系统栏明暗都要用到宿主 Activity
+    val activity = context as? android.app.Activity
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val view = LocalView.current
 
     val book by viewModel.book.collectAsStateWithLifecycle()
@@ -114,6 +118,8 @@ fun ReaderScreen(
     val autoReading by viewModel.autoReading.collectAsStateWithLifecycle()
     val ttsState by viewModel.tts.state.collectAsStateWithLifecycle()
     val highlights by viewModel.chapterHighlights.collectAsStateWithLifecycle()
+    // 翻页动画的触发令牌（每次翻页自增）。不订阅它就等于关掉了所有翻页动效。
+    val flipToken by viewModel.flipToken.collectAsStateWithLifecycle()
 
     var chromeVisible by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(ReaderSheet.NONE) }
@@ -153,17 +159,42 @@ fun ReaderScreen(
         }
     }
 
-    // 切后台时也要结算，否则「读了两小时后切走」会丢掉这段时长
-    DisposableEffect(context) {
-        val activity = context as? android.app.Activity
-        onDispose { }
+    /**
+     * 切后台时结算阅读时长。
+     *
+     * 这段早先是个**空实现**（注释写着「切后台时也要结算」但 onDispose 里什么都没有），
+     * 后果是：打开书 → 按 Home → 三小时后回来 → 退出，这三小时会被算成阅读时长，
+     * 直接污染每日时长、周报与热力图。两个方法本来就存在，只差接线。
+     */
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> viewModel.endSession()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> viewModel.resumeSession()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 音量键翻页
-    if (settings.volumeKeyPaging) {
-        androidx.compose.runtime.LaunchedEffect(Unit) {
-            // 由 Activity 的按键分发处理（见 MainActivity 的 dispatchKeyEvent）
+    /**
+     * 系统栏图标的明暗跟随应用内主题。
+     *
+     * `enableEdgeToEdge()` 只在 Activity 创建时按**系统** uiMode 判定一次；
+     * 用户在阅读页点「夜间」或设置里选夜幕主题时系统 uiMode 不变，
+     * 状态栏图标仍是深色，落在深色背景上几乎看不见。
+     */
+    DisposableEffect(settings.theme, settings.followSystemDark) {
+        val window = activity?.window
+        val view = activity?.findViewById<android.view.View>(android.R.id.content)
+        val isDark = palette.dark
+        if (window != null && view != null) {
+            val controller = androidx.core.view.WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !isDark
+            controller.isAppearanceLightNavigationBars = !isDark
         }
+        onDispose { }
     }
 
     Box(
@@ -182,6 +213,14 @@ fun ReaderScreen(
         }
 
         // —— 正文区 ——
+        // 安全区要先上报给 ViewModel：分页必须扣除系统栏高度，
+        // 否则排出来的页会比版心高一截，末行溢出到屏幕外。
+        val safeTopPx = statusBarHeightPx()
+        val safeBottomPx = navigationBarHeightPx()
+        LaunchedEffect(safeTopPx, safeBottomPx) {
+            viewModel.setInsets(safeTopPx, safeBottomPx, density)
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -215,7 +254,12 @@ fun ReaderScreen(
                     pageNumber = pageIndex + 1,
                     percent = viewModelPercent(pages, chapterHeaders, chapterIndex, pageIndex),
                     highlights = highlights,
-                    flipToken = 0,
+                    // 翻页动画的触发令牌：必须来自 ViewModel。
+                    // 早先这里硬编码 0，而 PagedReader 用 remember(flipToken) 触发动效，
+                    // 于是仿真/平移/覆盖三种翻页动画**从未播放过** —— 令牌永远是同一个值。
+                    flipToken = flipToken,
+                    viewModel = viewModel,
+                    uiDensity = density,
                 )
             }
         }
@@ -401,6 +445,13 @@ private fun PagedReader(
     percent: Float,
     highlights: List<IntRange>,
     flipToken: Int,
+    /** 用于上报实测的正文区高度与标题高度 —— 分页的纵向依据 */
+    viewModel: ReaderViewModel,
+    /**
+     * 密度。刻意不叫 `density`：`graphicsLayer {}` 的接收者本身就叫 density，
+     * 同名参数会把那个接收者遮蔽掉，里面的 cameraDistance 就解析不到了。
+     */
+    uiDensity: androidx.compose.ui.unit.Density,
 ) {
     val palette = moyuPalette()
     val pageText = content.substring(
@@ -439,6 +490,9 @@ private fun PagedReader(
         letterSpacing = settings.letterSpacingEm.sp,
     )
 
+    val safeTop = com.moyu.reader.ui.safeTop
+    val safeBottom = com.moyu.reader.ui.safeBottom
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -449,9 +503,13 @@ private fun PagedReader(
                     alpha = progress.coerceIn(0f, 1f)
                     cameraDistance = 18f * density
                 }
+                .padding(horizontal = settings.marginDp.dp)
+                // 纵向留白取「页边距」与「系统栏」的较大值：
+                // 页边距调大时仍然生效，而小米 14 这类高状态栏机型上也不会被压住。
+                // 这个值与 ReaderViewModel 里 contentHeight 的扣减必须一致，否则分页会漂移。
                 .padding(
-                    horizontal = settings.marginDp.dp,
-                    vertical = (settings.marginDp * 0.9f).dp,
+                    top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
+                    bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
                 ),
         ) {
             // —— 天头：书眉 ——
@@ -472,25 +530,48 @@ private fun PagedReader(
             }
 
             // —— 版心：正文 —— 上下留白大于左右，形成书籍的不对称版心
-            Box(modifier = Modifier.weight(1f)) {
+            //
+            // clipToBounds 是必须的：Column 的测量高度不受 Box 约束，
+            // 一旦分页多排了一行，文字会**画到地脚页码上面**甚至越出页面。
+            // 裁掉之后溢出表现为「少一行」而不是「糊成一团」，问题更容易被发现。
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clipToBounds()
+                    .onSizeChanged { size ->
+                        // 分页的纵向可用高度取这里的实测值：Box 已经把页边距、
+                        // 系统栏安全区与地脚页码全部扣掉，因此它与真实版心天然一致。
+                        viewModel.setContentBoxSize(size.width, size.height, uiDensity)
+                    },
+            ) {
                 SelectionContainer {
-                    Column {
+                    Column(modifier = Modifier.fillMaxSize()) {
                         if (showTitle) {
-                            Text(
-                                text = chapterNumberLabel,
-                                style = furnitureStyle,
-                                color = palette.textSecondary,
-                                modifier = Modifier.padding(bottom = 6.dp),
-                            )
-                            Text(
-                                text = chapterTitle,
-                                style = MaterialTheme.typography.headlineSmall.copy(
-                                    fontFamily = fontFamilyFor(settings.fontFamily),
-                                ),
-                                color = palette.text,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(bottom = 14.dp),
-                            )
+                            // 标题块单独测量：首页要按它扣掉几行，其余页不扣。
+                            // 间距用 Spacer 而不是 padding，这样测到的高度
+                            // 就是实际占用的高度（padding 会让测量值与占位不一致）。
+                            Column(
+                                modifier = Modifier.onSizeChanged { size ->
+                                    viewModel.setFirstPageHeaderHeight(size.height, uiDensity)
+                                },
+                            ) {
+                                Text(
+                                    text = chapterNumberLabel,
+                                    style = furnitureStyle,
+                                    color = palette.textSecondary,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = chapterTitle,
+                                    style = MaterialTheme.typography.headlineSmall.copy(
+                                        fontFamily = fontFamilyFor(settings.fontFamily),
+                                    ),
+                                    color = palette.text,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Spacer(Modifier.height(14.dp))
+                            }
                         }
                         Text(
                             text = buildPageText(pageText, settings, highlights, pageStart),

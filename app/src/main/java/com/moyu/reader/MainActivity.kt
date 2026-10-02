@@ -50,8 +50,9 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(paletteFor(settings.theme).surface),
                 ) {
+                    // 不再把 settings 传进 MoyuApp：底部导航的可见性由路由决定，
+                    // 与设置无关。少一层参数传递，少一处可能不同步的状态。
                     MoyuApp(
-                        settings = settings,
                         settingsViewModel = settingsViewModel,
                         factory = factory,
                     )

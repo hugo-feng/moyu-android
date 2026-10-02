@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,9 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -65,6 +63,8 @@ import com.moyu.reader.ui.components.MoyuPrimaryButton
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.SegmentedControl
 import com.moyu.reader.ui.components.ThinProgressBar
+import com.moyu.reader.ui.safeBottom
+import com.moyu.reader.ui.safeTop
 import com.moyu.reader.ui.theme.moyuPalette
 import java.io.File
 
@@ -75,6 +75,7 @@ import java.io.File
  * 「继续阅读」放在最显眼的位置是因为它是最高频的动作：
  * 用户打开阅读器的绝大多数时候就是想接着上次的地方读。
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ShelfScreen(
     factory: MoyuViewModelFactory,
@@ -99,7 +100,13 @@ fun ShelfScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(palette.surface),
-        contentPadding = PaddingValues(bottom = 80.dp),
+        // 书架是唯一没有顶栏的页面（内容直接顶到屏幕最上面），
+        // 因此状态栏的安全区必须它自己让出来，否则问候语和「我的书架」会被压住。
+        // 底部同时留出：底部导航栏高度 + 手势条，避免最后一行被遮。
+        contentPadding = PaddingValues(
+            top = safeTop,
+            bottom = 80.dp + safeBottom,
+        ),
     ) {
         item {
             ShelfHeader(
@@ -171,19 +178,47 @@ fun ShelfScreen(
                 )
             }
         } else if (settings.shelfLayout == ShelfLayout.GRID) {
+            /**
+             * 网格布局。
+             *
+             * 这里不用 LazyVerticalGrid，原因是一个真实的缺陷：
+             * 之前把它嵌在 LazyColumn 的一个 item 里，为了让它「撑开」而硬编码了高度
+             * `((books/3 + 1) * 200).dp` 并禁用它的滚动 —— 那个公式同时假设了「3 列」
+             * 和「每行 200dp」，两个都不成立（实际每行约 237dp，窄屏只有 2 列）。
+             * 于是容器高度小于内容高度，**最后一排书根本不会被组合出来，看不见也点不到**。
+             *
+             * FlowRow 会自然撑到内容高度，不需要任何高度预测；书架的书籍数量在几十本量级，
+             * 一次性组合的开销完全可以接受（真正需要懒加载的是成千上万条的列表）。
+             */
             item {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 104.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(((items.size / 3 + 1) * 200).dp.coerceAtMost(6000.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
-                    userScrollEnabled = false,
-                ) {
-                    items(items, key = { it.book.id }) { item ->
-                        BookGridCard(item = item, onClick = { onOpenBook(item.book.id) })
+                /**
+                 * 列数按可用宽度算，而不是写死。
+                 *
+                 * 每列最小 104dp（与原来的 GridCells.Adaptive 同口径），
+                 * 再按 14dp 间隔推算最多能放几列；至少 1 列，避免极窄屏算出 0。
+                 * 这样 2 列 / 3 列 / 4 列都能正确适配，也不会再有「算错列数」的问题。
+                 */
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val gap = 14.dp
+                    val available = maxWidth - 28.dp // 左右各 14dp 内边距
+                    val minColumn = 104.dp
+                    val columns = (((available + gap) / (minColumn + gap)).toInt()).coerceAtLeast(1)
+
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        maxItemsInEachRow = columns,
+                        horizontalArrangement = Arrangement.spacedBy(gap),
+                        verticalArrangement = Arrangement.spacedBy(18.dp),
+                    ) {
+                        items.forEach { item ->
+                            BookGridCard(
+                                item = item,
+                                onClick = { onOpenBook(item.book.id) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
@@ -458,10 +493,11 @@ private fun ShelfFilters(
 private fun BookGridCard(
     item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(2.dp),

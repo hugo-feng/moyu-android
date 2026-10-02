@@ -68,6 +68,8 @@ import com.moyu.reader.ui.components.MoyuChip
 import com.moyu.reader.ui.components.MoyuPrimaryButton
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.SegmentedControl
+import com.moyu.reader.ui.safeDrawingBottomPadding
+import com.moyu.reader.ui.safeDrawingTopPadding
 import com.moyu.reader.ui.theme.fontDisplayName
 import com.moyu.reader.ui.theme.paletteFor
 import com.moyu.reader.ui.theme.themeDisplayName
@@ -97,7 +99,10 @@ fun ReaderTopBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            // 背景铺到状态栏底下（保持沉浸），内容下移到安全区内。
+            // 顺序是「先背景、后 padding」，反过来会在状态栏处留一条透明缝。
             .background(palette.surface)
+            .safeDrawingTopPadding()
             .height(54.dp)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -157,7 +162,10 @@ fun ReaderBottomBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(palette.surface),
+            // 背景铺到手势条底下，内容抬到安全区之上。
+            // 顺序「先背景、后 padding」不能反，否则手势条处会留一条透明缝。
+            .background(palette.surface)
+            .safeDrawingBottomPadding(),
     ) {
         Row(
             modifier = Modifier

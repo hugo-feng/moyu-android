@@ -221,7 +221,10 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             append(prefs.bold).append('|')
             append(prefs.indentEm).append('|')
             append(prefs.letterSpacingEm).append('|')
-            append(viewport.first).append('x').append(viewport.second)
+            append(viewport.first).append('x').append(viewport.second).append('|')
+            // 正文区实测高度与章首页标题高度都必须进缓存键：
+            // 它们决定每页能放几行，变了却不重排就会少字或被裁。
+            append(contentBoxHeight).append('|').append(firstPageHeaderHeight)
         }
         if (!force && key == lastPageKey) return
         lastPageKey = key
@@ -230,10 +233,23 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         val marginPx = with(density) { prefs.marginDp.dp.toPx() }
         val lineHeightPx = textSizePx * prefs.lineHeightMultiplier
 
+        /**
+         * 纵向可用高度**来自渲染侧的实测值**，而不是在这里推算。
+         *
+         * 早先这里写的是 `viewport.second - marginPx*0.9 - insetsTop - insetsBottom`：
+         * 它假定「版心 = 整屏 − 页边距 − 系统栏」，但渲染时 Column 里还压着
+         * 天头书眉与地脚页码，章首页还多一整块标题。于是分页按 28 行排、
+         * 版心只装得下 26 行 —— **每页悄悄少 2~3 行字**（约 40~60 字），
+         * 而且用户不会察觉。这类错误靠推算永远对不齐，只能实测。
+         */
+        val measuredHeight = contentBoxHeight
+            ?: (viewport.second - marginPx * 0.9f - _insets.first - _insets.second).toInt()
+
         val metrics = PaginationEngine.Metrics(
             contentWidth = (viewport.first - marginPx * 2).toInt().coerceAtLeast(1),
-            contentHeight = (viewport.second - marginPx).toInt().coerceAtLeast(1),
+            contentHeight = measuredHeight.coerceAtLeast(1),
             lineHeight = lineHeightPx.toInt().coerceAtLeast(1),
+            firstPageHeaderHeight = firstPageHeaderHeight,
         )
 
         val paint = PaginationEngine.buildTextPaint(
@@ -251,6 +267,25 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     // —— 视口尺寸由 Composable 上报 ——
     private var _viewport: Pair<Int, Int>? = null
 
+    /**
+     * 系统栏占用的纵向空间（top, bottom），单位像素。
+     *
+     * 为什么分页必须知道它：`enableEdgeToEdge()` 让内容画到状态栏与手势条底下，
+     * 正文因此需要额外让开这两块区域。若分页不扣除，排出来的页会比可视区高一截，
+     * 末行就被推到屏幕外 —— 用户看到的就是「字铺满后底部被遮挡」。
+     * 小米 14 的澎湃 OS 3（Android 16）强制边到边，这条路径必然走到。
+     */
+    private var _insets: Pair<Int, Int> = 0 to 0
+
+    /**
+     * 正文区的**实测**高度（像素，已扣掉页边距、系统栏与地脚页码）。
+     * 由 PagedReader 的正文容器通过 onSizeChanged 上报。
+     */
+    private var contentBoxHeight: Int? = null
+
+    /** 章首页标题块（章节序号 + 大标题）的实测高度，只有第一页要扣。 */
+    private var firstPageHeaderHeight: Int = 0
+
     fun setViewport(widthPx: Int, heightPx: Int, density: Density) {
         val previous = _viewport
         _viewport = widthPx to heightPx
@@ -258,6 +293,41 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         if (previous == null || previous.first != widthPx || previous.second != heightPx) {
             recomputePagination(density)
         }
+    }
+
+    /**
+     * 上报正文容器的实测尺寸。
+     *
+     * 这是分页纵向可用高度的**唯一来源**：容器已经把页边距、安全区与地脚页码
+     * 全部扣掉了（它们都是布局约束），因此这个数字天然与渲染一致，
+     * 不会再出现「分页按 28 行排、版心只装得下 26 行」这类少字问题。
+     */
+    fun setContentBoxSize(widthPx: Int, heightPx: Int, density: Density) {
+        if (heightPx <= 0) return
+        if (contentBoxHeight == heightPx) return
+        contentBoxHeight = heightPx
+        recomputePagination(density)
+    }
+
+    /** 上报章首页标题块高度。仅在章首页渲染时量得到，切页后归零。 */
+    fun setFirstPageHeaderHeight(heightPx: Int, density: Density) {
+        val next = heightPx.coerceAtLeast(0)
+        if (next == firstPageHeaderHeight) return
+        firstPageHeaderHeight = next
+        recomputePagination(density)
+    }
+
+    /**
+     * 上报系统栏高度。
+     *
+     * 值没变就直接返回：Composable 每次重组都会上报，
+     * 不做这个短路就会每帧重新排版，翻页明显卡顿。
+     */
+    fun setInsets(topPx: Int, bottomPx: Int, density: Density) {
+        val next = topPx.coerceAtLeast(0) to bottomPx.coerceAtLeast(0)
+        if (next == _insets) return
+        _insets = next
+        recomputePagination(density)
     }
 
     // ============================================================
@@ -370,7 +440,8 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             percent = (globalOffset.toFloat() / total).coerceIn(0f, 1f),
             updatedAt = System.currentTimeMillis(),
         )
-        scope.launch { bookRepo.savePosition(bookId, position) }
+        // 走应用级作用域：本函数也会在 onCleared 里被调用，那时 viewModelScope 已被取消
+        container.applicationScope.launch { bookRepo.savePosition(bookId, position) }
     }
 
     // ============================================================
@@ -394,7 +465,8 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         val nowOffset = if (chapter != null && page != null) chapter.start + page.start else sessionStartOffset
         val charsRead = (nowOffset - sessionStartOffset).coerceAtLeast(0)
 
-        scope.launch { statsRepo.recordSession(bookId, durationSec, charsRead) }
+        // 同样走应用级作用域：切后台与退出时的结算都在 onCleared 路径上
+        container.applicationScope.launch { statsRepo.recordSession(bookId, durationSec, charsRead) }
     }
 
     /** 重新开始一段会话（从后台返回时调用）。 */

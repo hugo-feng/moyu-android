@@ -8,12 +8,21 @@ plugins {
 
 android {
     namespace = "com.moyu.reader"
-    compileSdk = 35
+
+    /**
+     * 编译与目标版本对齐 Android 16（API 36）。
+     *
+     * 理由：目标机型是小米 14 的澎湃 OS 3，其底座就是 Android 16。
+     * 只编到 35 虽然能跑，但等于放弃了针对该版本的适配声明 ——
+     * Android 16 在边到边、权限、后台限制上都有行为变更，
+     * 明确 target 36 才能让系统按新规则对待本应用。
+     */
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.moyu.reader"
         minSdk = 26          // Android 8.0：覆盖 99%+ 在用设备，且能用 java.time 等现代 API
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  单色层：主题图标（Android 13+ / 澎湃 OS）会忽略这里的颜色，
+  用系统取色重新填充整个形状，因此这一层必须是**纯剪影**。
+  书脊缺口特意加宽，否则两页会被填成一整块、看不出是书。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#000000"
+        android:pathData="M50.5,34 C38.5,28 28,26 22,26 L22,74 C28,74 38.5,76 50.5,82 Z" />
+    <path
+        android:fillColor="#000000"
+        android:pathData="M57.5,34 C69.5,28 80,26 86,26 L86,74 C80,74 69.5,76 57.5,82 Z" />
+</vector>
