@@ -242,12 +242,16 @@ fun ShelfScreen(
         /**
          * 是否处在「分组总览」这一层。
          *
-         * 总览下只显示分组卡片，**不显示书的空状态** ——
-         * 那时书还没列出来，显示「书架还空着」会与上面的分组卡片自相矛盾
-         * （卡片上明明写着有多少本）。
+         * 用户明确要求：书架首页**只有分组卡片，点进去才看书**。
+         * 因此总览下不再往下走到书籍网格 —— 下面的三个分支
+         * （空状态 / 网格 / 列表）全部只在「书库」或「已钻入某个分组」时执行。
+         *
+         * 这也顺带解决了「分组卡下面又平铺一遍书」的重复感：
+         * 「全部」卡片本身就已经代表所有书了。
          */
         val atGroupOverview = !libraryMode && openGroupName == null && groupCards.isNotEmpty()
-        if (items.isEmpty() && !atGroupOverview) {
+
+        if (!atGroupOverview && items.isEmpty()) {
             item {
                 EmptyState(
                     icon = if (libraryMode) Icons.AutoMirrored.Filled.MenuBook else Icons.Filled.BookmarkBorder,
@@ -282,7 +286,8 @@ fun ShelfScreen(
                     },
                 )
             }
-        } else if (settings.shelfLayout == ShelfLayout.GRID) {            /**
+        } else if (!atGroupOverview && settings.shelfLayout == ShelfLayout.GRID) {
+            /**
              * 网格布局。
              *
              * 这里不用 LazyVerticalGrid，原因是一个真实的缺陷：
@@ -354,7 +359,7 @@ fun ShelfScreen(
                     }
                 }
             }
-        } else {
+        } else if (!atGroupOverview) {
             items(items, key = { it.book.id }) { item ->
                 BookListRow(
                     item = item,

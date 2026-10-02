@@ -462,15 +462,32 @@ fun TypographySheet(
     val density = androidx.compose.ui.platform.LocalDensity.current
 
     ReaderSheetContainer(onDismiss = onDismiss) {
-        SheetHeader(title = "排版", onClose = onDismiss)
+        SheetHeader(title = "阅读设置", onClose = onDismiss)
 
+        /**
+         * 面板的组织方式。
+         *
+         * ## 重排的原因
+         *
+         * 用户反馈「阅读界面的设置页很乱」。原先六个分组是**平铺**的，
+         * 顺序是：主题 / 字号与间距 / 字体 / 翻页方式 / 护眼与亮度 / 自动阅读。
+         * 问题有三个：
+         *   1. 「护眼色温」明明属于外观，却被放在「翻页方式」之后；
+         *   2. 「字号与间距」和「字体」是同一件事（都是文字长相），却隔开了；
+         *   3. 分组之间只有一行小字标题，没有视觉边界，滚起来分不清到哪一组了。
+         *
+         * 现在按「外观 → 文字 → 翻页 → 自动化」四段排列，
+         * 每段之间有分隔线，段内先给最常用的项。
+         */
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 20.dp),
+                .padding(bottom = 24.dp),
         ) {
-            // —— 主题 ——
+            // ============ 一、外观 ============
+            SheetSection("外观")
+
             SheetGroupTitle("主题")
             Row(
                 modifier = Modifier
@@ -507,7 +524,53 @@ fun TypographySheet(
                 }
             }
 
-            // —— 字号 / 行距 / 边距 ——
+            // 护眼色温：外观项，因此紧跟在主题后面（原先被排在翻页方式之后）。
+            // 亮度不在这里调：它是系统级设置，应用内再叠一层会与系统的
+            // 自动亮度互相打架（拉低后仍被系统按环境光改动，找不到原因）。
+            SheetGroupTitle("护眼色温")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Slider(
+                    value = settings.eyeCareWarmth,
+                    onValueChange = { viewModel.updateSettings { store -> store.setEyeCare(it) } },
+                    valueRange = 0f..1f,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = if (settings.eyeCareWarmth <= 0.001f) {
+                        "关闭"
+                    } else {
+                        "${(settings.eyeCareWarmth * 100).toInt()}%"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier
+                        .width(44.dp)
+                        .padding(start = 8.dp),
+                )
+            }
+
+            // ============ 二、文字 ============
+            SheetSection("文字")
+
+            // 字体放在字号之前：先决定「用哪种字」，再决定「多大」。
+            SheetGroupTitle("字体")
+            com.moyu.reader.ui.components.ChipRow(
+                modifier = Modifier.padding(horizontal = 16.dp),
+            ) {
+                FontFamilyId.entries.forEach { font ->
+                    MoyuChip(
+                        text = fontDisplayName(font),
+                        active = settings.fontFamily == font,
+                        onClick = { viewModel.updateSettings { it.setFontFamily(font) } },
+                    )
+                }
+            }
+
             SheetGroupTitle("字号与间距")
             StepperRow(
                 label = "正文字号",
@@ -534,28 +597,9 @@ fun TypographySheet(
                 onPlus = { viewModel.updateSettings { it.setMargin(settings.marginDp + 2) } },
             )
 
-            // —— 字体 ——
-            //
-            // 原先这里是 `FontFamilyId.entries.take(3)` —— 只渲染前三个，
-            // 后面新增的字体选项**根本不会显示**。用户要求「添加更多字体」
-            // 却看不到任何变化，有一半原因就在这里。
-            //
-            // 现在用可换行的 ChipRow 把全部字体都列出来：
-            // 一行放不下会自然折行，不需要手动截断。
-            SheetGroupTitle("字体")
-            com.moyu.reader.ui.components.ChipRow(
-                modifier = Modifier.padding(horizontal = 16.dp),
-            ) {
-                FontFamilyId.entries.forEach { font ->
-                    MoyuChip(
-                        text = fontDisplayName(font),
-                        active = settings.fontFamily == font,
-                        onClick = { viewModel.updateSettings { it.setFontFamily(font) } },
-                    )
-                }
-            }
+            // ============ 三、翻页 ============
+            SheetSection("翻页")
 
-            // —— 翻页方式 ——
             SheetGroupTitle("翻页方式")
             Row(modifier = Modifier.padding(horizontal = 16.dp)) {
                 SegmentedControl(
@@ -570,45 +614,20 @@ fun TypographySheet(
                     onSelect = { viewModel.setPageMode(it) },
                 )
             }
+            Text(
+                text = when (settings.pageMode) {
+                    PageMode.COVER -> "新页从右侧盖上来，旧页不动"
+                    PageMode.SCROLL -> "整章连续滚动，不翻页"
+                    PageMode.NONE -> "直接切换，没有过渡"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp),
+            )
 
-            // —— 护眼与亮度 ——
-            SheetGroupTitle("护眼与亮度")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "护眼色温",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.text,
-                    modifier = Modifier.width(72.dp),
-                )
-                Slider(
-                    value = settings.eyeCareWarmth,
-                    onValueChange = { viewModel.updateSettings { store -> store.setEyeCare(it) } },
-                    valueRange = 0f..1f,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "${(settings.eyeCareWarmth * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary,
-                    modifier = Modifier.width(40.dp),
-                )
-            }
-            // 亮度不在这里调：它是系统级设置，应用内再叠一层会与系统的
-            // 自动亮度互相打架（拉低后仍被系统按环境光改动，找不到原因）。
-            // 系统下拉栏已经能调，不必重复提供。
+            // ============ 四、自动化 ============
+            SheetSection("自动阅读")
 
-            // —— 自动阅读节奏 ——
-            //
-            // 「自动阅读」的**开关**也从底栏移到了这里（原先底栏有一个
-            // 「自动/暂停」按钮）。用户要求把自动阅读放进设置 ——
-            // 它是一次性开启后就让应用自己翻页的功能，不需要常驻一个按钮；
-            // 常驻反而容易被误触，一碰就开始自动翻页。
-            SheetGroupTitle("自动阅读")
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -616,7 +635,7 @@ fun TypographySheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = if (autoReading) "正在自动阅读" else "自动阅读已关闭",
+                    text = if (autoReading) "正在自动阅读" else "已关闭",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.text,
                     modifier = Modifier.weight(1f),
@@ -645,7 +664,44 @@ fun TypographySheet(
                     modifier = Modifier.weight(1f),
                 )
             }
+            Text(
+                text = if (settings.pageMode == PageMode.SCROLL) {
+                    "滚动模式下按此速度匀速向下滚动，读速与翻页一致"
+                } else {
+                    "每隔这么久自动翻到下一页"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp),
+            )
         }
+    }
+}
+
+/**
+ * 面板里的一段。给出一行段标题 + 上方分隔线。
+ *
+ * 原先各分组只有一行小字标题，段与段之间没有边界，
+ * 面板一长就分不清自己滚到哪一组了 —— 这是「很乱」的一部分。
+ */
+@Composable
+private fun SheetSection(title: String) {
+    val palette = moyuPalette()
+    Column {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp, start = 16.dp, end = 16.dp)
+                .height(1.dp)
+                .background(palette.divider.copy(alpha = 0.5f)),
+        )
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = palette.text,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
+        )
     }
 }
 
