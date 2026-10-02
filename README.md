@@ -6,18 +6,18 @@
 ## 安装包
 
 **所有历史版本统一存放在 `releases/`**，每个版本一个独立子目录，互不覆盖。
-取用最新版：`releases/v1.0.1/apk/moyu-reader-1.0.1.apk`
+取用最新版：`releases/v1.0.5/apk/moyu-reader-1.0.5.apk`
 
 | | |
 |---|---|
 | 包名 | `com.moyu.reader` |
-| 版本 | **1.0.1**（versionCode 2） |
+| 版本 | **1.0.5**（versionCode 6） |
 | 大小 | **2.31 MB** |
 | 最低版本 | Android 8.0（API 26） |
 | 目标版本 | **Android 16（API 36）** —— 对应澎湃 OS 3 所基于的版本 |
 | 架构 | arm64-v8a / armeabi-v7a / x86 / x86_64 |
 | 签名 | v2 方案，`CN=MoYu Reader`（仓库内自签名密钥，见下） |
-| SHA-256 | `081351514EDB4EFF1144D9BBD9B608384AF585633AA70181386E246C87B638C4` |
+| SHA-256 | `42DFE608369C4D6BA36F401E338528A6F6E6E81C4CE9E7AAD0E8556834D6DA77` |
 
 安装：把 APK 传到手机，用文件管理器点开安装（需允许「安装未知来源应用」）。
 
