@@ -26,6 +26,25 @@ object PaginationEngine {
     data class Page(val index: Int, val start: Int, val end: Int)
 
     /**
+     * 底部安全余量占行高的比例（一半）。
+     *
+     * 为什么必须有：字体度量的 descent 与实际字形底边并不总是吻合，
+     * 部分机型对 CJK 字形的下缘也有额外裁切，于是最后一行经常被切掉一半
+     * —— 真机上的原话是「底部下面一行还是被切了一半的字」。
+     *
+     * 用**半行**是权衡结果：
+     *   - 太小（几像素）挡不住字形下缘的差异；
+     *   - 太大（一整行）会明显浪费版面，底部空一大块看得出来。
+     *
+     * 这一余量同时作用于分页判定与容器高度校验，因此两侧口径一致。
+     */
+    private const val BOTTOM_SAFETY_RATIO = 0.5f
+
+    /** 按行高算出的底部安全余量（像素）。 */
+    fun bottomMarginFor(lineHeight: Int): Int =
+        (lineHeight * BOTTOM_SAFETY_RATIO).toInt().coerceAtLeast(0)
+
+    /**
      * 排版度量。
      *
      * `contentHeight` 是**正文区**的真实高度（已扣掉页边距、系统栏安全区与地脚页码）。
@@ -56,10 +75,14 @@ object PaginationEngine {
          * 指定页真正可用的高度。
          *
          * 章首页要扣掉标题块；其余页不扣。
-         * 分页不仅按行数约束，还要按这个高度二次校验（见 `paginate` 的回退逻辑）。
+         * **两页都要再扣掉底部安全余量** —— 这是防「最后一行被切一半」的关键：
+         * 字形下缘（descent）与实际底边并不总是吻合，留出半行之后
+         * 即使有偏差也切不到字。
          */
-        fun contentHeightFor(isFirstPage: Boolean): Int =
-            if (isFirstPage) (contentHeight - firstPageHeaderHeight).coerceAtLeast(1) else contentHeight
+        fun contentHeightFor(isFirstPage: Boolean): Int {
+            val base = if (isFirstPage) (contentHeight - firstPageHeaderHeight) else contentHeight
+            return (base - bottomMarginFor(lineHeight)).coerceAtLeast(1)
+        }
     }
 
     /**
@@ -273,12 +296,17 @@ object PaginationEngine {
 
     /**
      * 估算一屏大约多少字，用于导入时预估页数与阅读时长。
+     *
      * 中文按 1 个宽度单位、ASCII 按 0.5 计，与 Web 端口径一致。
+     *
+     * 行数必须走 [Metrics.contentHeightFor] 而不是直接除 `contentHeight` ——
+     * 后者没有扣掉底部安全余量，估算值会比实际能放的多出半行。
+     * 导入时预估页数因此偏少，用户会觉得「怎么翻得比说的多」。
      */
     fun estimateCharsPerScreen(metrics: Metrics, textSizePx: Float): Int {
         if (textSizePx <= 0f) return 1
         val charsPerLine = metrics.contentWidth / textSizePx
-        val lines = metrics.contentHeight / maxOf(1, metrics.lineHeight)
+        val lines = metrics.contentHeightFor(isFirstPage = false) / maxOf(1, metrics.lineHeight)
         return maxOf(1, (charsPerLine * lines).toInt())
     }
 }

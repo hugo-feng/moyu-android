@@ -88,6 +88,11 @@ class PaginationHeightInvariantTest {
 
         assert(pages.size > 1) { "$note：应当分出多页，实际 ${pages.size} 页" }
 
+        // 与引擎同一口径：容器高度要扣掉底部安全余量。
+        // 不扣的话这条测试会比实际渲染宽松半行 —— 那正是上一轮
+        // 「测试全过但真机仍被切一半」的原因。
+        val usableHeight = metrics.contentHeightFor(isFirstPage = false)
+
         var worstOverflow = 0
         var worstPage = -1
         var worstLines = 0
@@ -97,7 +102,7 @@ class PaginationHeightInvariantTest {
             // 这里按最宽松的情形估：直接用原文切片排版。
             if (text.isBlank()) continue
             val l = layout(text, contentWidth, p)
-            val overflow = l.height - contentHeight
+            val overflow = l.height - usableHeight
             if (overflow > worstOverflow) {
                 worstOverflow = overflow
                 worstPage = page.index

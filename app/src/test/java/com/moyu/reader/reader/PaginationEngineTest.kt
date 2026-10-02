@@ -86,10 +86,16 @@ class PaginationEngineTest {
 
     @Test
     fun `estimateCharsPerScreen multiplies chars per line by lines`() {
-        // 1080 / 48 = 22.5 字/行；1920 / 48 = 40 行 -> 900
+        // 1080 / 48 = 22.5 字/行（浮点，不取整）。
+        // 行数要扣掉**底部安全余量**（半行 = 24px）：
+        // 可用高 1920 − 24 = 1896，1896 / 48 = 39 行。
+        // 22.5 × 39 = 877.5 → 取整 877。
+        //
+        // 这个余量是防「最后一行被切一半」的关键，真机实测确认过。
+        // 估字数跟着变小是正确行为：宁可少估一点，也不能估多了让用户以为一屏能读更多。
         val metrics = Metrics(contentWidth = 1080, contentHeight = 1920, lineHeight = 48)
-        assertEquals(40, metrics.maxLines)
-        assertEquals(900, PaginationEngine.estimateCharsPerScreen(metrics, 48f))
+        assertEquals(39, metrics.maxLines)
+        assertEquals(877, PaginationEngine.estimateCharsPerScreen(metrics, 48f))
     }
 
     @Test
@@ -104,6 +110,7 @@ class PaginationEngineTest {
     fun `estimateCharsPerScreen falls back to one line when lineHeight is not positive`() {
         val metrics = Metrics(contentWidth = 1080, contentHeight = 1920, lineHeight = 0)
         assertEquals("lineHeight <= 0 must degrade to 1 line", 1, metrics.maxLines)
+        // lineHeight 为 0 时底部余量也是 0，可用高仍是 1920。
         // lines = 1920 / max(1, 0) = 1920 -> 22.5 * 1920 = 43200
         assertEquals(43200, PaginationEngine.estimateCharsPerScreen(metrics, 48f))
     }
@@ -111,12 +118,13 @@ class PaginationEngineTest {
     @Test
     fun `estimateCharsPerScreen scales with the font size`() {
         val metrics = Metrics(contentWidth = 1080, contentHeight = 1920, lineHeight = 48)
-        // 96px: 1080/96 = 11.25 字/行 * 40 行 = 450
-        // 24px: 1080/24 = 45    字/行 * 40 行 = 1800
+        // 行数 39（已扣半行余量）
+        // 96px: 1080/96 = 11.25 字/行 * 39 = 438
+        // 24px: 1080/24 = 45    字/行 * 39 = 1755
         val bigger = PaginationEngine.estimateCharsPerScreen(metrics, 96f)
         val smaller = PaginationEngine.estimateCharsPerScreen(metrics, 24f)
-        assertEquals(450, bigger)
-        assertEquals(1800, smaller)
+        assertEquals(438, bigger)
+        assertEquals(1755, smaller)
         assertTrue("larger font must fit fewer chars: $bigger vs $smaller", bigger < smaller)
     }
 }

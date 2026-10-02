@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -719,10 +720,9 @@ private fun PagedReader(
                     )
                     if (settings.showStatusBar) {
                         Spacer(Modifier.width(7.dp))
-                        Text(
-                            text = if (batteryPercent >= 0) "${batteryPercent}%" else "--",
-                            style = furnitureStyle,
-                            color = palette.textSecondary,
+                        BatteryGlyph(
+                            percent = batteryPercent,
+                            tint = palette.textSecondary,
                             modifier = Modifier.alpha(0.85f),
                         )
                     }
@@ -884,6 +884,62 @@ private fun ScrollReader(
                 )
             }
         }
+    }
+}
+
+/**
+ * 电量图标：一个电池轮廓 + 按容量填充的内部条。
+ *
+ * 为什么自己画而不是用矢量资源：这只是几何图形，
+ * Canvas 画出来不到二十行，比新增 drawable 资源 + 若干密度变体更轻，
+ * 而且填充比例能直接跟着真实电量走（用静态图标就只能按档位切换）。
+ *
+ * `percent < 0` 表示尚未拿到电量（广播还没回来），此时只画空壳不画填充，
+ * 不会显示成 0% 让人误以为没电了。
+ */
+@Composable
+private fun BatteryGlyph(
+    percent: Int,
+    tint: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.Canvas(
+        modifier = modifier.then(Modifier.size(20.dp, 11.dp)),
+    ) {
+        val stroke = 1.dp.toPx()
+        val capWidth = 2.dp.toPx()
+        val bodyWidth = this.size.width - capWidth
+
+        // 电池外壳
+        drawRoundRect(
+            color = tint,
+            topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
+            size = androidx.compose.ui.geometry.Size(bodyWidth - stroke, this.size.height - stroke),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke),
+        )
+        // 正极凸起
+        drawRoundRect(
+            color = tint,
+            topLeft = androidx.compose.ui.geometry.Offset(bodyWidth, this.size.height * 0.3f),
+            size = androidx.compose.ui.geometry.Size(capWidth, this.size.height * 0.4f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
+        )
+
+        if (percent < 0) return@Canvas
+
+        // 内部填充：留 2dp 内边距，比例跟着电量走
+        val inset = 2.dp.toPx()
+        val innerMax = bodyWidth - inset * 2
+        val filled = (innerMax * (percent.coerceIn(0, 100) / 100f)).coerceAtLeast(0f)
+        if (filled <= 0f) return@Canvas
+
+        drawRoundRect(
+            color = tint,
+            topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+            size = androidx.compose.ui.geometry.Size(filled, this.size.height - inset * 2),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()),
+        )
     }
 }
 
