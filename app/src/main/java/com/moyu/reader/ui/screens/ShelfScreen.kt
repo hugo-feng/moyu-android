@@ -1,4 +1,4 @@
-package com.moyu.reader.ui.screens
+﻿package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Upload
@@ -58,7 +59,6 @@ import com.moyu.reader.data.model.BookFormat
 import com.moyu.reader.data.prefs.ShelfLayout
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.ShelfGroup
-import com.moyu.reader.ui.ShelfStats
 import com.moyu.reader.ui.ShelfViewModel
 import com.moyu.reader.ui.components.EmptyState
 import com.moyu.reader.ui.components.IconAction
@@ -66,7 +66,6 @@ import com.moyu.reader.ui.components.MoyuPrimaryButton
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.ThinProgressBar
 import com.moyu.reader.ui.safeBottom
-import com.moyu.reader.ui.safeTop
 import com.moyu.reader.ui.theme.moyuPalette
 import java.io.File
 
@@ -1025,9 +1024,19 @@ private fun BookListRow(
             contentDescription = if (item.book.inShelf) "移出书架" else "加入书架",
             onClick = onToggleShelf,
         )
+        /**
+         * 「本书书签」入口。
+         *
+         * 图标与上面那个「加入书架」必须区分开 —— 用户反馈
+         * 「加入书架和书签的图标不能相同」：两者原先都是书签图标，
+         * 摆在相邻位置完全分不清哪个是哪个。
+         *
+         * 加入书架改用 `BookmarkAdd` 风格的语义（书签 + 增删），
+         * 这里保持纯书签图标；两者形状差异明显。
+         */
         IconAction(
-            icon = Icons.Filled.Search,
-            contentDescription = "本书笔记",
+            icon = Icons.Filled.Bookmarks,
+            contentDescription = "本书书签",
             onClick = onNotes,
         )
     }

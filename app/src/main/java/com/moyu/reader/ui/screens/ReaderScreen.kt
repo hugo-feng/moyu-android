@@ -3,6 +3,7 @@ package com.moyu.reader.ui.screens
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -38,7 +39,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -79,7 +82,6 @@ fun ReaderScreen(
     bookId: String,
     onExit: () -> Unit,
     onOpenSearch: (String) -> Unit,
-    onOpenNotes: (String) -> Unit,
     /** 打开后要跳到的章；null 表示沿用数据库里记录的上次位置 */
     jumpToChapter: Int? = null,
     /** 章内字符偏移，配合 jumpToChapter 使用 */
@@ -345,69 +347,89 @@ fun ReaderScreen(
         }
 
         /**
-         * 点击手势：**两种模式都需要**。
+         * 点击手势层：**两种模式都需要**，但绝不能吃掉滚动。
          *
-         * 早先这里跟着翻页手势一起被 `if (pageMode != SCROLL)` 关掉了 ——
-         * 当时是为了修「滚动模式下点屏幕两侧会静默跳到下一章」，
-         * 但连带把「点中间呼出工具栏」也砍了。滚动模式因此进不去
-         * 目录 / 笔记 / 排版，用户报的现象正是「控制栏收不起来、点中间没反应」。
+         * ## 为什么不用 detectTapGestures
          *
-         * 正确的分法：左右热区的**翻页**只在分页模式生效，
-         * 而中间热区的**呼出工具栏**两种模式都要有。
-         * 滚动模式下不存在「翻页」这个概念（进度由滚动位置决定），
-         * 若也响应左右点击就会静默跨章、进度与实际脱节。
+         * 这一层是盖在整个阅读区之上的。`detectTapGestures` 一旦挂上就会
+         * 消费手势流，于是：滚动模式里正文的 `verticalScroll`
+         * **完全收不到拖动** —— 用户报「滚动完全动不了」。
+         *
+         * 而且它判定点击只看「按下后短时间内抬起」，**不关心中间移动了多远**，
+         * 所以即使不消费，每次滑动也都会被它当成一次点击而弹出工具栏。
+         * 上一版试图用「比较按下与抬起的位移」来补救，但那时手势已经被消费了，
+         * 补不上 —— 位移大就 `return`，点击层什么也不做，而滚动层也收不到事件，
+         * 结果是**滑动既没滚动、也没反应**。
+         *
+         * ## 正确做法：自己判方向，判成滑动就完全不消费
+         *
+         * 用 `awaitPointerEventScope` 手动跟踪指针：
+         *   - 位移一旦超过 `touchSlop`，标记为拖动，之后**不消费任何事件**，
+         *     让 `verticalScroll` 正常接管；
+         *   - 抬起时若从未超过阈值，才算点击，执行热区逻辑。
+         *
+         * 关键在于「判成拖动后就不消费」：Compose 的手势传递里，
+         * 未被消费的事件会继续传给下层，滚动因此恢复。
          */
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(settings.pageMode) {
-                    /**
-                     * 这一层是**盖在整个阅读区之上**的点击层。
-                     *
-                     * ## 滚动模式为什么会「一滚就弹出控制栏」
-                     *
-                     * `detectTapGestures` 判定点击的依据是「按下后短时间内抬起」，
-                     * 它**不关心中间移动了多远**。滚动恰恰是「按下 → 移动 → 抬起」，
-                     * 于是每一次滑动都被它当成一次点击，立刻切换了工具栏。
-                     * 用户的原话是「滚动模式直接失效，滚动操作直接唤起了控制栏」。
-                     *
-                     * 修法是记录按下与抬起的位移：超过 `touchSlop` 就认定这是滑动，
-                     * 不当作点击。`touchSlop` 用系统值而不是自己写死像素 ——
-                     * 不同密度的判定阈值本来就不同。
-                     */
-                    var downAt: androidx.compose.ui.geometry.Offset? = null
-                    detectTapGestures(
-                        onPress = { pos -> downAt = pos },
-                        onTap = { offset ->
-                            val start = downAt
-                            downAt = null
-                            // 位移超过系统触摸阈值 → 这是滑动，不是点击
-                            val slop = viewConfiguration.touchSlop
-                            val moved = start != null &&
-                                (offset - start).getDistance() > slop
-                            if (moved) return@detectTapGestures
+                    val slop = viewConfiguration.touchSlop
+                    awaitPointerEventScope {
+                        while (true) {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var dragged = false
+                            var totalMove = 0f
+                            var pointer = down
 
-                            val width = size.width
-                            val third = width / 3f
-                            val middleOnly = settings.pageMode == PageMode.SCROLL
-                            when {
-                                // 滚动模式：任意位置都当作「中间」——只切换工具栏
-                                middleOnly || (offset.x >= third && offset.x <= third * 2) -> {
-                                    chromeVisible = !chromeVisible
-                                    if (!chromeVisible) sheet = ReaderSheet.NONE
+                            // 跟踪这一次按下的全过程
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == pointer.id }
+                                    ?: break
+
+                                if (change.changedToUpIgnoreConsumed()) break
+                                if (!change.pressed) break
+
+                                val delta = change.positionChange()
+                                totalMove += delta.getDistance()
+                                if (totalMove > slop) {
+                                    dragged = true
+                                    // 已判定为拖动：不再消费，交给滚动层
+                                    break
                                 }
+                                pointer = change
+                            }
 
-                                offset.x < third -> {
-                                    if (!chromeVisible) viewModel.flip(-1, density)
-                                }
+                            if (!dragged) {
+                                val pos = down.position
+                                val third = size.width / 3f
+                                val middleOnly = settings.pageMode == PageMode.SCROLL
+                                when {
+                                    // 滚动模式：任意位置都当作「中间」——只切换工具栏
+                                    middleOnly || (pos.x >= third && pos.x <= third * 2) -> {
+                                        chromeVisible = !chromeVisible
+                                        if (!chromeVisible) sheet = ReaderSheet.NONE
+                                    }
 
-                                else -> {
-                                    if (!chromeVisible) viewModel.flip(1, density)
+                                    pos.x < third -> {
+                                        if (!chromeVisible) viewModel.flip(-1, density)
+                                    }
+
+                                    else -> {
+                                        if (!chromeVisible) viewModel.flip(1, density)
+                                    }
                                 }
                             }
-                        },
-                        onLongPress = { },
-                    )
+
+                            // 等这一次手势彻底结束，避免把同一次触摸判成多次
+                            while (true) {
+                                val e = awaitPointerEvent()
+                                if (e.changes.all { !it.pressed }) break
+                            }
+                        }
+                    }
                 },
         )
 
@@ -436,7 +458,9 @@ fun ReaderScreen(
                 chapterCount = chapterHeaders.size,
                 onChapterSeek = { index -> viewModel.jumpToChapter(index, density) },
                 onToc = { sheet = if (sheet == ReaderSheet.TOC) ReaderSheet.NONE else ReaderSheet.TOC },
-                onNotes = { sheet = if (sheet == ReaderSheet.NOTES) ReaderSheet.NONE else ReaderSheet.NOTES },
+                onBookmarks = {
+                    sheet = if (sheet == ReaderSheet.BOOKMARKS) ReaderSheet.NONE else ReaderSheet.BOOKMARKS
+                },
                 onSettings = {
                     sheet = if (sheet == ReaderSheet.TYPOGRAPHY) ReaderSheet.NONE else ReaderSheet.TYPOGRAPHY
                 },
@@ -479,13 +503,12 @@ fun ReaderScreen(
                 onDismiss = { sheet = ReaderSheet.NONE },
             )
 
-            ReaderSheet.NOTES -> ReaderNotesSheet(
+            ReaderSheet.BOOKMARKS -> ReaderBookmarksSheet(
                 viewModel = viewModel,
                 onJump = { chapterIdx, offset ->
                     viewModel.jumpToChapter(chapterIdx, density, offset)
                     sheet = ReaderSheet.NONE
                 },
-                onOpenAll = { onOpenNotes(bookId) },
                 onDismiss = { sheet = ReaderSheet.NONE },
             )
 
@@ -528,7 +551,7 @@ fun ReaderScreen(
 }
 
 /** 阅读器内可打开的面板。 */
-private enum class ReaderSheet { NONE, TOC, NOTES, TYPOGRAPHY }
+private enum class ReaderSheet { NONE, TOC, BOOKMARKS, TYPOGRAPHY }
 
 /**
  * 分页阅读视图。

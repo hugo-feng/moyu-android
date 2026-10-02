@@ -1,4 +1,4 @@
-package com.moyu.reader.ui.screens
+﻿package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -8,18 +8,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -32,12 +29,9 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FormatSize
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
@@ -179,7 +173,7 @@ fun ReaderBottomBar(
     chapterCount: Int,
     onChapterSeek: (Int) -> Unit,
     onToc: () -> Unit,
-    onNotes: () -> Unit,
+    onBookmarks: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -226,7 +220,15 @@ fun ReaderBottomBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ReaderToolButton("目录", Icons.AutoMirrored.Filled.List, onToc)
-            ReaderToolButton("笔记", Icons.Filled.Edit, onNotes)
+
+            /**
+             * 「书签」打开本书书签列表。
+             *
+             * 这里原是「笔记」按钮（书签 + 划线 + 写想法）。用户要求删掉笔记功能、
+             * 只保留书签 —— 长按选词写笔记那条路反复修了三次在真机上仍不可用，
+             * 与其留一个点不出东西的入口，不如把确定能用的那部分做扎实。
+             */
+            ReaderToolButton("书签", Icons.Filled.Bookmark, onBookmarks)
 
             /**
              * 「设置」进入阅读设置面板。
@@ -933,31 +935,42 @@ fun DictionaryPopup(
 }
 
 // ============================================================
-// 阅读器内笔记面板
+// 阅读器内书签面板
 // ============================================================
 
+/**
+ * 本书书签列表。
+ *
+ * ## 为什么只剩书签
+ *
+ * 原先这里是「笔记面板」：书签 + 划线 + 写想法。用户明确要求
+ * **「把笔记功能删掉，只保留书签功能」** —— 长按选词写笔记那条路
+ * 反复修了三次仍然在真机上不可用（先是手势被 SelectionContainer 抢走，
+ * 改成 BasicTextField 原生选区后仍不稳定）。
+ *
+ * 与其留一个用不了的入口，不如把确定能用的那部分做扎实：
+ * 书签通过工具栏按钮一键添加，不依赖文本选择，这条路径简单可靠。
+ *
+ * 划线数据（highlight 表）没有删除，只是不再有界面入口 ——
+ * 万一将来要恢复，数据还在。
+ */
 @Composable
-fun ReaderNotesSheet(
+fun ReaderBookmarksSheet(
     viewModel: ReaderViewModel,
     onJump: (chapterIndex: Int, chapterOffset: Int) -> Unit,
-    onOpenAll: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
-    val highlights by viewModel.highlights.collectAsStateWithLifecycle()
     val palette = moyuPalette()
 
     ReaderSheetContainer(onDismiss = onDismiss) {
         SheetHeader(
-            title = "本书笔记",
-            subtitle = "${bookmarks.size} 书签 · ${highlights.size} 划线",
+            title = "本书书签",
+            subtitle = "${bookmarks.size} 个",
             onClose = onDismiss,
-            action = {
-                MoyuTextButton(text = "全部", onClick = onOpenAll)
-            },
         )
 
-        if (bookmarks.isEmpty() && highlights.isEmpty()) {
+        if (bookmarks.isEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -966,12 +979,12 @@ fun ReaderNotesSheet(
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    text = "还没有书签和笔记",
+                    text = "还没有书签",
                     style = MaterialTheme.typography.titleSmall,
                     color = palette.textSecondary,
                 )
                 Text(
-                    text = "阅读时长按选中文字即可划线、写想法或添加书签。",
+                    text = "在阅读页点顶部栏右侧的书签图标，即可为当前页添加书签。",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary,
                     modifier = Modifier.padding(top = 8.dp),
@@ -982,42 +995,29 @@ fun ReaderNotesSheet(
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(bookmarks, key = { it.id }) { bookmark ->
-                NoteRow(
+                BookmarkRow(
                     chapterLabel = "第 ${bookmark.chapterIndex + 1} 章",
-                    text = bookmark.excerpt.ifEmpty { "（书签）" },
-                    note = bookmark.note,
-                    timeLabel = com.moyu.reader.data.repository.BookRepository.formatRelativeTime(bookmark.createdAt),
+                    text = bookmark.excerpt.ifEmpty { "（本页）" },
+                    timeLabel = com.moyu.reader.data.repository.BookRepository
+                        .formatRelativeTime(bookmark.createdAt),
                     onClick = { onJump(bookmark.chapterIndex, bookmark.chapterOffset) },
                     onDelete = { viewModel.deleteBookmark(bookmark.id) },
-                )
-            }
-            items(highlights, key = { it.id }) { highlight ->
-                NoteRow(
-                    chapterLabel = "第 ${highlight.chapterIndex + 1} 章",
-                    text = highlight.text,
-                    note = highlight.note,
-                    timeLabel = com.moyu.reader.data.repository.BookRepository.formatRelativeTime(highlight.createdAt),
-                    colorHex = highlight.color,
-                    onClick = { onJump(highlight.chapterIndex, highlight.startOffset) },
-                    onDelete = { viewModel.deleteHighlight(highlight.id) },
                 )
             }
         }
     }
 }
 
+/** 书签列表里的一行。删除做二次确认 —— 误删的代价比多点一次高。 */
 @Composable
-private fun NoteRow(
+private fun BookmarkRow(
     chapterLabel: String,
     text: String,
-    note: String,
     timeLabel: String,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    colorHex: String? = null,
 ) {
     val palette = moyuPalette()
-    // 删除采用二次确认：笔记是用户亲手留下的内容，误删的代价比多点一次高得多
     var confirming by remember { mutableStateOf(false) }
 
     Column(
@@ -1026,15 +1026,6 @@ private fun NoteRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (colorHex != null) {
-                Box(
-                    modifier = Modifier
-                        .padding(end = 6.dp)
-                        .size(9.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(parseColor(colorHex)),
-                )
-            }
             Text(
                 text = chapterLabel,
                 style = MaterialTheme.typography.labelSmall,
@@ -1053,50 +1044,36 @@ private fun NoteRow(
             text = text,
             style = MaterialTheme.typography.bodyMedium,
             color = palette.text,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 6.dp)
                 .clickable(onClick = onClick),
         )
 
-        if (note.isNotEmpty()) {
-            Text(
-                text = note,
-                style = MaterialTheme.typography.bodySmall,
-                color = palette.textSecondary,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 7.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(palette.divider.copy(alpha = 0.3f))
-                    .padding(9.dp),
-            )
-        }
-
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 6.dp),
-            horizontalArrangement = Arrangement.End,
+            modifier = Modifier.padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            MoyuTextButton(text = "跳转", onClick = onClick)
             MoyuTextButton(
                 text = if (confirming) "确认删除" else "删除",
-                onClick = { if (confirming) onDelete() else confirming = true },
+                onClick = {
+                    if (confirming) onDelete() else confirming = true
+                },
             )
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp)
+                .height(1.dp)
+                .background(palette.divider.copy(alpha = 0.4f)),
+        )
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(palette.divider.copy(alpha = 0.45f)),
-    )
 }
 
-/** 解析 #RRGGBB 颜色；非法值退回主题主色，避免因数据问题崩溃。 */
-private fun parseColor(hex: String): Color = runCatching {
-    Color(android.graphics.Color.parseColor(hex))
-}.getOrDefault(Color(0xFF8A6A46))
 
 // ============================================================
 // 提示条

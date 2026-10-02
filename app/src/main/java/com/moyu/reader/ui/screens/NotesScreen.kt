@@ -42,7 +42,6 @@ import com.moyu.reader.ui.NotesViewModel
 import com.moyu.reader.ui.components.EmptyState
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.MoyuTopBar
-import com.moyu.reader.ui.components.SegmentedControl
 import com.moyu.reader.ui.theme.moyuPalette
 
 /**
@@ -78,32 +77,17 @@ fun NotesScreen(
             .background(palette.surface),
     ) {
         MoyuTopBar(
-            title = if (bookId == null) "笔记" else "本书笔记",
-            subtitle = "${counts.first} 书签 · ${counts.second} 划线",
+            title = "本书书签",
+            subtitle = "${counts.first} 个",
             onBack = onBack,
         )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        ) {
-            SegmentedControl(
-                options = listOf(
-                    NotesViewModel.NoteKind.ALL to "全部",
-                    NotesViewModel.NoteKind.BOOKMARK_ONLY to "书签",
-                    NotesViewModel.NoteKind.HIGHLIGHT_ONLY to "划线",
-                ),
-                selected = kind,
-                onSelect = { viewModel.setKindFilter(it) },
-            )
-        }
 
         if (entries.isEmpty()) {
             EmptyState(
                 icon = Icons.Filled.EditNote,
                 title = "还没有书签和笔记",
-                description = "阅读时长按选中文字即可划线、写想法或添加书签。",
+                description = "在阅读页点顶部栏右侧的书签图标，即可为当前页添加书签。",
                 modifier = Modifier.fillMaxSize(),
             )
             return@Column

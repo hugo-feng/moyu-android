@@ -283,8 +283,6 @@ fun MoyuApp(
                         navController.popBackStack()
                     },
                     onOpenSearch = { id -> navController.navigate(Routes.search(id)) },
-                    // 阅读器工具栏的「笔记」按钮：跳到**本书**笔记页
-                    onOpenNotes = { id -> navController.navigate(Routes.bookNotes(id)) },
                 )
             }
 
