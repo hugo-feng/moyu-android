@@ -214,6 +214,7 @@ fun MoyuApp(
                 SettingsScreen(
                     viewModel = settingsViewModel,
                     onBack = { navController.popBackStack() },
+                    onOpenImport = { navController.navigate(Routes.IMPORT) },
                 )
             }
 
@@ -305,11 +306,20 @@ private fun MoyuBottomBar(
     onSelect: (String) -> Unit,
 ) {
     val palette = moyuPalette()
+    /**
+     * 底部标签。
+     *
+     * 只有四个：书库 / 书架 / 历史 / 设置。
+     *
+     * 「统计」不再占标签位 —— 它的入口已放在书库页顶部的箭头处。
+     * 统计是低频查看的内容（看趋势而不是每次都用），
+     * 占一个常驻标签位不划算，而顶部入口离「我这周读了多少」的
+     * 那条数字更近，反而更好找。
+     */
     val items = listOf(
         Triple(Routes.LIBRARY, "书库", Icons.AutoMirrored.Filled.MenuBook),
         Triple(Routes.SHELF, "书架", Icons.Filled.Bookmark),
         Triple(Routes.HISTORY, "历史", Icons.Filled.History),
-        Triple(Routes.STATS, "统计", Icons.Filled.BarChart),
         Triple(Routes.SETTINGS, "设置", Icons.Filled.Settings),
     )
 

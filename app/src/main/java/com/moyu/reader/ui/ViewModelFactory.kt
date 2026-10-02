@@ -34,6 +34,9 @@ class MoyuViewModelFactory(
             modelClass.isAssignableFrom(NotesViewModel::class.java) ->
                 NotesViewModel(container) as T
 
+            modelClass.isAssignableFrom(HistoryViewModel::class.java) ->
+                HistoryViewModel(container) as T
+
             modelClass.isAssignableFrom(StatsViewModel::class.java) ->
                 StatsViewModel(container) as T
 

@@ -132,58 +132,71 @@ fun ShelfScreen(
             bottom = 80.dp + safeBottom,
         ),
     ) {
-        item {
-            ShelfHeader(
-                greeting = viewModel.greeting(),
-                stats = stats,
-                libraryMode = libraryMode,
-                shelfCount = shelfCount,
-                onOpenStats = onOpenStats,
-            )
-        }
-
-        if (continueItem != null) {
+        /**
+         * 书架模式**不显示顶部区块**。
+         *
+         * 用户的原话是「书架只应该显示书，乱七八糟的删掉，不应该直接克隆主页的布局」。
+         * 原来两个模式共用同一套顶部（问候语 + 三个统计数字 + 继续阅读卡 +
+         * 排序筛选标签 + 新建分组），于是书架页看起来就是主页的复制品，
+         * 而它真正该做的事只有一件：把书架上的书列出来。
+         *
+         * 那套顶部属于**书库**（进入应用后的第一个页面，承担「总览」职责）：
+         * 统计数字与统计入口留在那里，书架页保持干净。
+         */
+        if (libraryMode) {
             item {
-                ContinueReadingCard(
-                    item = continueItem!!,
-                    onClick = { onOpenBook(continueItem!!.book.id) },
-                    modifier = Modifier.padding(horizontal = 14.dp),
+                ShelfHeader(
+                    greeting = viewModel.greeting(),
+                    stats = stats,
+                    libraryMode = true,
+                    shelfCount = shelfCount,
+                    onOpenStats = onOpenStats,
                 )
             }
-        }
 
-        item {
-            ShelfToolbar(
-                layout = settings.shelfLayout,
-                onLayoutChange = { viewModel.setLayout(it) },
-                sort = settings.shelfSort,
-                onSortChange = { viewModel.setSort(it) },
-                onSearch = { onOpenSearch(null) },
-                onImport = onOpenImport,
-            )
-        }
+            if (continueItem != null) {
+                item {
+                    ContinueReadingCard(
+                        item = continueItem!!,
+                        onClick = { onOpenBook(continueItem!!.book.id) },
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                    )
+                }
+            }
 
-        item {
-            ShelfFilters(
-                current = filter,
-                groups = groups.map { it.id to it.name },
-                onSelect = { viewModel.setFilter(it) },
-                onCreateGroup = { name -> viewModel.createGroup(name) },
-            )
+            // 排序与布局已移到设置页（见 SettingsScreen 的外观与主题 / 书架分组）。
+            // 这里只剩「搜索全书内容」与「导入」两个高频动作。
+            item {
+                SubHeaderActions(
+                    onSearch = { onOpenSearch(null) },
+                    onImport = onOpenImport,
+                )
+            }
+        } else {
+            item {
+                ShelfTitleRow(
+                    title = "书架",
+                    subtitle = "${items.size} 本书",
+                )
+            }
         }
 
         if (items.isEmpty()) {
             item {
                 EmptyState(
-                    icon = Icons.AutoMirrored.Filled.MenuBook,
-                    title = if (filter == ShelfFilter.All) "书架还空着" else "这个筛选下没有书",
-                    description = if (filter == ShelfFilter.All) {
-                        "导入本机的 TXT / EPUB / PDF 文件，或先加载一本示例书开始体验。"
+                    icon = if (libraryMode) Icons.AutoMirrored.Filled.MenuBook else Icons.Filled.BookmarkBorder,
+                    title = if (libraryMode) "书库还空着" else "书架还空着",
+                    description = if (libraryMode) {
+                        // 导入入口已移到设置页；这里同时说明去哪儿导入，
+                        // 否则用户会停在空页面上找不到下一步
+                        "在「设置 → 导入本地书籍」里把 TXT / EPUB / PDF 加进来，或先加载一本示例书。"
                     } else {
-                        "换一个筛选条件试试，或者导入新书。"
+                        "书架只放你主动加入的书。去「书库」里挑一本，点「加入书架」它就会出现在这里。"
                     },
                     action = {
-                        if (filter == ShelfFilter.All) {
+                        // 书库为空时给两个起步动作；书架为空时只需要一句指引 ——
+                        // 书架的清空是用户自己造成的，给按钮反而显得啰嗦
+                        if (libraryMode) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -412,49 +425,54 @@ private fun readingProgressLabel(item: com.moyu.reader.data.model.ShelfItem): St
     else -> "${(item.percent * 100).toInt()}% · 共 ${item.book.chapterCount} 章"
 }
 
-/** 工具栏：布局切换 + 排序 + 搜索/导入。 */
+/**
+ * 书库页的次要操作行：搜索 + 导入。
+ *
+ * 布局切换与排序**不在这里** —— 它们已移到设置页。
+ * 那两个是「设一次就不动」的偏好，每次进书库都看到一排标签
+ * 只会让页面显得杂乱（用户的原话是「这太难看了」）。
+ */
+
+/**
+ * 书库页的次要操作行：搜索 + 导入。
+ *
+ * 布局切换与排序**不在这里** —— 它们已移到设置页。
+ * 那两个是「设一次就不动」的偏好，每次进书库都看到一排标签
+ * 只会让页面显得杂乱（用户的原话是「这太难看了」）。
+ */
 @Composable
-private fun ShelfToolbar(
-    layout: ShelfLayout,
-    onLayoutChange: (ShelfLayout) -> Unit,
-    sort: com.moyu.reader.data.prefs.ShelfSort,
-    onSortChange: (com.moyu.reader.data.prefs.ShelfSort) -> Unit,
+private fun SubHeaderActions(
     onSearch: () -> Unit,
     onImport: () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            SegmentedControl(
-                options = listOf(
-                    ShelfLayout.GRID to "网格",
-                    ShelfLayout.LIST to "列表",
-                ),
-                selected = layout,
-                onSelect = onLayoutChange,
-            )
-            Spacer(Modifier.weight(1f))
-            MoyuTextButton(text = "搜索", icon = Icons.Filled.Search, onClick = onSearch)
-            MoyuTextButton(text = "导入", icon = Icons.Filled.Upload, onClick = onImport)
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MoyuTextButton(text = "搜索", icon = Icons.Filled.Search, onClick = onSearch)
+        MoyuTextButton(text = "导入", icon = Icons.Filled.Upload, onClick = onImport)
+    }
+}
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ShelfViewModel.SORT_OPTIONS.forEach { (value, label) ->
-                MoyuChip(
-                    text = label,
-                    active = value == sort,
-                    onClick = { onSortChange(value) },
-                )
-            }
-        }
+/** 书架页的标题行：一个标题 + 一个数量，仅此而已。 */
+@Composable
+private fun ShelfTitleRow(title: String, subtitle: String) {
+    val palette = moyuPalette()
+    Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineLarge,
+            color = palette.text,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
     }
 }
 
@@ -703,14 +721,33 @@ fun BookCover(
             .background(coverGradient(book.title)),
     ) {
         val coverFile = book.coverPath?.let { File(it) }
-        if (coverFile != null && coverFile.exists()) {
+
+        /**
+         * 封面图是否真的能显示。
+         *
+         * `coverFile.exists()` **不足以**说明能显示 —— 文件可能存在但内容
+         * 不是有效图片（写了一半、被别的程序截断、扩展名对不上格式）。
+         * 这时 Coil 解码失败，`AsyncImage` 什么也不画，用户看到的就是
+         * 底下的渐变 —— 也就是「只有一个色块，什么字都没有」。
+         *
+         * 因此把加载失败也当作「没有封面」处理：`onError` 里把状态置为
+         * 加载失败，于是改画带书名的程序生成封面。宁可显示一个朴素的书脊，
+         * 也不要显示一个没有辨识度的纯色矩形。
+         */
+        var coverFailed by remember(book.coverPath) { mutableStateOf(false) }
+        val showCoverImage = coverFile != null && coverFile.exists() && !coverFailed
+
+        if (showCoverImage) {
             AsyncImage(
                 model = coverFile,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                onError = { coverFailed = true },
                 modifier = Modifier.fillMaxSize(),
             )
-        } else {
+        }
+
+        if (!showCoverImage) {
             Text(
                 text = book.title.take(9),
                 style = MaterialTheme.typography.labelMedium,

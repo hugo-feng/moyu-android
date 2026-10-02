@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FolderDelete
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -46,8 +47,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moyu.reader.data.prefs.PageMode
 import com.moyu.reader.data.prefs.ThemeId
 import com.moyu.reader.ui.SettingsViewModel
+import com.moyu.reader.ui.components.MoyuChip
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.MoyuTopBar
+import com.moyu.reader.ui.components.SegmentedControl
 import com.moyu.reader.ui.components.SettingDivider
 import com.moyu.reader.ui.components.SettingRow
 import com.moyu.reader.ui.theme.moyuPalette
@@ -64,6 +67,14 @@ import com.moyu.reader.ui.theme.themeDisplayName
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onBack: () -> Unit,
+    /**
+     * 进入「导入本地书籍」页。
+     *
+     * 导入从书架/书库的工具栏移到了设置里：它是**低频且一次性**的动作
+     * （导入完就不再用），摆在书库顶部会长期占一个显眼位置，
+     * 而用户的原话是「导入本地书籍应该出现在设置页的设置项，而不是到处都是」。
+     */
+    onOpenImport: () -> Unit = {},
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val dictionaries by viewModel.dictionaries.collectAsStateWithLifecycle()
@@ -72,6 +83,24 @@ fun SettingsScreen(
     var confirmClear by remember { mutableStateOf(false) }
     /** 当前打开的二级页；null 表示停在一级分类列表。 */
     var page by remember { mutableStateOf<SettingsPage?>(null) }
+
+    /**
+     * 返回层级：二级页 → 一级分类列表 → 退出设置。
+     *
+     * 不做这件事的话，系统返回手势/返回键会**直接退出整个设置页**，
+     * 哪怕用户只是想从「外观与主题」回到分类列表。
+     * 用户的原话是「进入了二级界面后用系统返回手势，直接返回到书库了」。
+     *
+     * 用 `enabled` 控制拦截时机而不是在回调里判断：只有确实处在二级页时
+     * 才拦截，一级页面上返回手势的手感与系统完全一致
+     * （否则会吃掉本该退出设置页的那次返回）。
+     */
+    androidx.activity.compose.BackHandler(enabled = page != null) {
+        page = null
+        // 离开二级页时清掉未确认的「清除数据」状态，
+        // 否则下次进来会看到上次留下的「确认清除」按钮
+        confirmClear = false
+    }
 
     LaunchedEffect(Unit) { viewModel.loadDictionaries() }
 
@@ -187,6 +216,76 @@ fun SettingsScreen(
                 range = 0f..1f,
                 onValueChange = { viewModel.setEyeCare(it) },
             )
+            }
+
+            // ================= 书架与显示 =================
+            //
+            // 布局与排序原先摆在书架页顶部，每次进书架都看到一排标签。
+            // 它们是「设一次就不动」的偏好，放进设置更合适，
+            // 书架页也能保持干净（只显示书）。
+            if (page == SettingsPage.SHELF) {
+            GroupTitle("书架显示")
+
+            /**
+             * 导入入口。
+             *
+             * 放在「书架与显示」这一类的**最上面**：它是这个分类里唯一
+             * 会改变「有哪些书」的动作，其余都是显示偏好。
+             */
+            SettingRow(
+                label = "导入本地书籍",
+                hint = "从本机选择 TXT / EPUB / PDF，不需要存储权限",
+                onClick = onOpenImport,
+                trailing = {
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = palette.textSecondary,
+                    )
+                },
+            )
+            SettingDivider()
+
+            SettingRow(
+                label = "显示方式",
+                hint = "网格显示封面，列表显示更多信息",
+                trailing = {
+                    SegmentedControl(
+                        options = listOf(
+                            com.moyu.reader.data.prefs.ShelfLayout.GRID to "网格",
+                            com.moyu.reader.data.prefs.ShelfLayout.LIST to "列表",
+                        ),
+                        selected = settings.shelfLayout,
+                        onSelect = { viewModel.setShelfLayout(it) },
+                    )
+                },
+            )
+            SettingDivider()
+
+            SettingRow(
+                label = "默认排序",
+                hint = "书库与书架都按此排序",
+                trailing = {
+                    Text(
+                        text = SHELF_SORT_LABELS[settings.shelfSort] ?: "最近",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                    )
+                },
+            )
+            Column(
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            ) {
+                com.moyu.reader.ui.components.ChipRow {
+                    com.moyu.reader.data.prefs.ShelfSort.entries.forEach { sort ->
+                        MoyuChip(
+                            text = SHELF_SORT_LABELS[sort] ?: sort.name,
+                            active = settings.shelfSort == sort,
+                            onClick = { viewModel.setShelfSort(sort) },
+                        )
+                    }
+                }
+            }
             }
 
             // ================= 阅读习惯 =================
@@ -333,9 +432,19 @@ fun SettingsScreen(
     }
 }
 
+/** 排序项的中文名。放在这里而不是复用 ShelfViewModel 的常量 —— 那是 UI 文案。 */
+private val SHELF_SORT_LABELS = mapOf(
+    com.moyu.reader.data.prefs.ShelfSort.RECENT to "最近",
+    com.moyu.reader.data.prefs.ShelfSort.ADDED to "加入",
+    com.moyu.reader.data.prefs.ShelfSort.TITLE to "书名",
+    com.moyu.reader.data.prefs.ShelfSort.AUTHOR to "作者",
+    com.moyu.reader.data.prefs.ShelfSort.PROGRESS to "进度",
+)
+
 /** 设置页的一级分类。 */
 private enum class SettingsPage(val title: String, val icon: ImageVector) {
     APPEARANCE("外观与主题", Icons.Filled.Palette),
+    SHELF("书架与显示", Icons.Filled.GridView),
     READING("阅读习惯", Icons.Filled.AutoStories),
     SPEECH("朗读与词典", Icons.Filled.RecordVoiceOver),
     DATA("数据管理", Icons.Filled.FolderDelete),
@@ -355,6 +464,10 @@ private enum class SettingsPage(val title: String, val icon: ImageVector) {
             append(themeDisplayName(settings.theme))
             if (settings.followSystemDark) append(" · 跟随系统")
             if (settings.eyeCareWarmth > 0f) append(" · 护眼 ${(settings.eyeCareWarmth * 100).toInt()}%")
+        }
+        SHELF -> {
+            val layout = if (settings.shelfLayout == com.moyu.reader.data.prefs.ShelfLayout.GRID) "网格" else "列表"
+            "$layout · ${SHELF_SORT_LABELS[settings.shelfSort] ?: "最近"}排序"
         }
         READING -> buildString {
             append("自动 ${settings.autoReadSecondsPerPage} 秒/页")
