@@ -23,8 +23,8 @@ android {
         applicationId = "com.moyu.reader"
         minSdk = 26          // Android 8.0：覆盖 99%+ 在用设备，且能用 java.time 等现代 API
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -109,6 +109,77 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+}
+
+/**
+ * 版本化产物命名。
+ *
+ * 让 AGP 直接产出 `moyu-reader-<版本名>.apk`，而不是千篇一律的 `app-release.apk`。
+ *
+ * 为什么要在**构建层**做，而不是每次构建完手工改名：
+ * 手工改名依赖「我记得改」，忘一次就会把新版本覆盖到旧版本上 ——
+ * 而发布包一旦被覆盖，就没法再验证「用户装的是哪一版」。
+ * 放进构建配置后，文件名自带版本号，覆盖在物理上不可能发生。
+ */
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val versionName = variant.outputs
+                .firstNotNullOfOrNull { it.versionName.orNull }
+                ?: project.version.toString()
+            (output as? com.android.build.api.variant.impl.VariantOutputImpl)?.outputFileName?.set(
+                "moyu-reader-$versionName.apk",
+            )
+        }
+    }
+}
+
+/**
+ * 把已构建的安装包归档到统一的发布目录 `releases/v<版本名>/apk/`。
+ *
+ * 每个版本一个**独立子目录**，因此历史版本永远不会被覆盖，
+ * 也便于逐个核对「这一版装出来到底是什么样」。
+ *
+ * 关于 `dependsOn(packageRelease)`：Gradle 的配置校验不允许一个任务
+ * 「读了别的任务的输出目录却不声明依赖」——它会直接让构建失败。
+ * 这里显式声明，顺序就由 Gradle 保证，不依赖调用者写对任务顺序。
+ *
+ * 用法：./gradlew :app:release
+ */
+val archiveRelease by tasks.registering(Copy::class) {
+    group = "distribution"
+    description = "把发布安装包归档到 releases/v<版本>/（不覆盖历史版本）"
+
+    val versionName = android.defaultConfig.versionName ?: "0.0.0"
+    val releasesRoot = rootProject.layout.projectDirectory.dir("releases").dir("v$versionName")
+
+    dependsOn("packageRelease")
+    from(layout.buildDirectory.dir("outputs/apk/release")) {
+        include("*.apk")
+    }
+    into(releasesRoot.dir("apk"))
+    // 不改名：源文件名已由上面的 outputFileName 带上版本号
+
+    /**
+     * 归档前先清空该版本的目录。
+     *
+     * 必须做：AGP 不会删除**上一次构建留下的、文件名不同的**产物。
+     * 例如先构建过 1.0.0 又改成 1.0.1 再构建 `build/outputs/apk/release` 里
+     * 会同时存在两个文件，Copy 会把它们一起归档 —— 发布目录里就混进了旧包，
+     * 而发布目录的作用恰恰是「这里的东西就是这一版」。实测踩过一次。
+     */
+    doFirst {
+        val dest = releasesRoot.dir("apk").asFile
+        if (dest.exists()) dest.deleteRecursively()
+        dest.mkdirs()
+    }
+}
+
+/** 构建并归档发布包。 */
+tasks.register("release") {
+    group = "distribution"
+    description = "构建发布安装包并归档到 releases/（版本化，不覆盖历史）"
+    dependsOn(archiveRelease)
 }
 
 dependencies {

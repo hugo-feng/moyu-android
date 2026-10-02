@@ -1,0 +1,53 @@
+# 换行符与文本规范化
+#
+# 为什么需要这个文件：仓库在 Windows 上开发，而 Git for Windows 默认
+# `core.autocrlf=true`，会把工作区的 LF 换成 CRLF。
+# 结果是**每次提交都在刷 `LF will be replaced by CRLF` 警告**，
+# 而且同一个文件在不同机器上算出的 blob 不同 —— 协作时会出现
+# 「我这边没改，但 git 说整个文件都变了」的伪 diff，历史也就不可读了。
+#
+# 规则：**仓库里统一存 LF**，检出到工作区时由 Git 按平台处理。
+# 二进制文件（APK、图标、密钥库）必须明确标出来，否则 Git 会尝试
+# 把 CRLF 转换成 LF，直接**损坏文件**。
+
+# 所有文本文件：入库统一 LF
+* text=auto eol=lf
+
+# Kotlin / Java / Gradle
+*.kt    text eol=lf
+*.kts   text eol=lf
+*.java  text eol=lf
+*.gradle text eol=lf
+*.properties text eol=lf
+
+# 配置与文档
+*.xml   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.pro   text eol=lf
+
+# 脚本
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制：**禁止任何换行转换**，否则文件损坏
+*.apk   binary
+*.jar   binary
+*.jks   binary
+*.keystore binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+
+# 语言识别：让 GitHub 不要把这些算进仓库语言统计
+releases/** linguist-generated=true
+app/schemas/** linguist-generated=true

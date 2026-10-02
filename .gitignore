@@ -1,7 +1,36 @@
-﻿.gradle/
+# 构建产物不入库 —— 可由源码完整重建，入库会让 diff 塞满二进制变更。
+.gradle/
+.kotlin/
 build/
+app/build/
 local.properties
 *.iml
 .idea/
-app/build/
-app/keystore/
+
+# 注意：**刻意不忽略 app/keystore/**。
+# 那是仓库内的演示签名密钥，README 明确说明它随仓库分发，
+# 目的是让别人克隆下来就能直接构建出可安装的 APK。
+# 早先这里写了 `app/keystore/`，而 README 与 local.properties 都假设它存在 ——
+# 结果克隆出来的仓库跑 `:app:release` 会直接失败（签名配置找不到密钥库）。
+# 若将来换成正式密钥，应当**先把它从仓库移除并改写历史**，而不是只加一条忽略规则：
+# 已经提交过的密钥不会因为新增忽略规则而从历史里消失。
+
+# 安装包是上述规则的例外：releases/ 下的 APK **要入库**。
+# 理由见 releases/VERSION.md —— 它不可重建（同源码不同时间产物哈希不同），
+# 且「用户装的是哪一版」必须能追溯到具体提交。
+
+# IDE
+out/
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
