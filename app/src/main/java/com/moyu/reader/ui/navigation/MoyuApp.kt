@@ -1,7 +1,5 @@
 package com.moyu.reader.ui.navigation
 
-import com.moyu.reader.ui.theme.moyuPalette
-
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -65,11 +63,23 @@ object Routes {
     const val STATS = "stats"
     const val NOTES = "notes"
     const val SETTINGS = "settings"
-    const val READER = "reader/{bookId}"
+
+    /**
+     * 阅读器路由带可选的跳转目标。
+     *
+     * 为什么必须带上（而不是只传 bookId）：搜索命中与全局笔记的**全部意义**
+     * 就是跳到那一句原文。早先这两个入口都只 navigate(bookId)，
+     * 而阅读器只会从数据库恢复「上次读到的位置」—— 于是点了搜索结果却停在
+     * 上次的位置，功能等于失效。这里把章号与章内偏移作为查询参数传进去。
+     */
+    const val READER = "reader/{bookId}?chapter={chapter}&offset={offset}"
+
     const val SEARCH = "search?bookId={bookId}"
     const val IMPORT = "import"
 
-    fun reader(bookId: String) = "reader/$bookId"
+    /** @param chapterIndex 要跳到的章（-1 表示沿用上次位置） */
+    fun reader(bookId: String, chapterIndex: Int = -1, chapterOffset: Int = 0) =
+        "reader/$bookId?chapter=$chapterIndex&offset=$chapterOffset"
 
     fun search(bookId: String? = null) =
         if (bookId == null) "search" else "search?bookId=$bookId"
@@ -133,7 +143,8 @@ fun MoyuApp(
                     bookId = null,
                     onBack = { navController.popBackStack() },
                     onJump = { bookId, chapterIndex, chapterOffset ->
-                        navController.navigate(Routes.reader(bookId))
+                        // 带上命中位置，否则点了笔记只会回到上次读的地方
+                        navController.navigate(Routes.reader(bookId, chapterIndex, chapterOffset))
                     },
                 )
             }
@@ -145,11 +156,33 @@ fun MoyuApp(
                 )
             }
 
-            composable(Routes.READER) { entry ->
+            composable(
+                route = Routes.READER,
+                // 查询参数必须显式声明类型，否则 entry.arguments 里取不到值，
+                // 跳转目标会被静默丢弃（表现为「搜索跳转不生效」）。
+                arguments = listOf(
+                    androidx.navigation.navArgument("bookId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                    androidx.navigation.navArgument("chapter") {
+                        type = androidx.navigation.NavType.IntType
+                        defaultValue = -1
+                    },
+                    androidx.navigation.navArgument("offset") {
+                        type = androidx.navigation.NavType.IntType
+                        defaultValue = 0
+                    },
+                ),
+            ) { entry ->
                 val bookId = entry.arguments?.getString("bookId").orEmpty()
+                val targetChapter = entry.arguments?.getInt("chapter") ?: -1
+                val targetOffset = entry.arguments?.getInt("offset") ?: 0
                 ReaderScreen(
                     factory = factory,
                     bookId = bookId,
+                    // -1 表示「没有指定跳转目标」，阅读器沿用数据库里的上次位置
+                    jumpToChapter = targetChapter.takeIf { it >= 0 },
+                    jumpToOffset = targetOffset,
                     onExit = {
                         navController.popBackStack()
                     },
@@ -164,10 +197,10 @@ fun MoyuApp(
                     factory = factory,
                     bookId = bookId,
                     onBack = { navController.popBackStack() },
-                    onJump = { id, _, _ ->
-                        // 搜索结果点击后直接进入阅读器；阅读器会从数据库恢复最后位置，
-                        // 因此这里不需要额外传递章节偏移（避免深层导航参数传递的复杂性）。
-                        navController.navigate(Routes.reader(id))
+                    onJump = { id, chapterIndex, chapterOffset ->
+                        // 搜索的全部意义就是跳到那一句：必须把命中位置传进阅读器，
+                        // 只传 bookId 会让它停在「上次读到的地方」，功能等于失效。
+                        navController.navigate(Routes.reader(id, chapterIndex, chapterOffset))
                     },
                 )
             }

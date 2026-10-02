@@ -22,21 +22,27 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * 系统安全区（状态栏 / 手势条）参与分页的测试。
+ * 正文区高度参与分页的测试。
  *
- * 为什么这条逻辑必须有测试：
- *   目标机型是小米 14 的澎湃 OS 3（Android 16），强制边到边显示，
- *   正文会画到状态栏与手势条底下。若分页不扣除安全区高度，
- *   排出来的页就比可视区高一截，末行被推到屏幕外 ——
- *   用户看到的就是「字铺满后底部被遮挡」。这个缺陷只在真机上看得见，
- *   而本机没有可用模拟器，所以必须用测试把逻辑钉住。
+ * ## 这条契约是怎么演变的（很重要，别退回旧写法）
  *
- * 测试方式：Robolectric + 真实 Room（内存库）+ 真实 StaticLayout，
- * 走 `ReaderViewModel.open(...)` 的完整路径，不是对公式的重复演算。
+ * 最早的实现里，ViewModel 用「视口高 − 页边距 − 系统栏」**推算**可用高度。
+ * 那个公式漏掉了版心内的天头书眉与地脚页码，于是分页按 28 行排、版心只装得下
+ * 26 行 —— **每页悄悄少 2~3 行字**，用户根本察觉不到自己少读了。
  *
- * 注意等待方式：`viewModelScope` 绑定 Main dispatcher，
- * 在 Robolectric 里必须显式推进 Main looper（`shadowOf(...).idle()`），
- * 用 `Thread.sleep` 等不到协程 —— 那只会让测试随机失败。
+ * 现在纵向高度只有一个来源：**渲染侧实测的正文容器高度**。
+ * 容器自己已经被页边距、系统栏安全区与地脚页码约束住了，
+ * 所以 `setContentBoxSize` 报上来的数字天然与真实版心一致，
+ * 不可能再和布局脱节。系统栏变高 → 容器变矮 → 页数变多，整条链路是自动的。
+ *
+ * 因此测试断言的是**新契约**：
+ *   1. 容器越矮，页数越多（这是「安全区影响分页」的等价形式）；
+ *   2. 容器高度变化必须触发重新分页（缓存键要包含它）；
+ *   3. 章首页标题高度必须让首页少排几行（否则首页末行会被裁）。
+ *
+ * 测试方舟：Robolectric + 真实 Room（内存库）+ 真实 StaticLayout。
+ * 注意 `viewModelScope` 绑定 Main dispatcher，必须显式推进 Main looper
+ * （`shadowOf(...).idle()`）—— 用 Thread.sleep 等不到协程。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -49,12 +55,8 @@ class ReaderInsetsPaginationTest {
      * 足够长的正文，**每句独占一行**。
      *
      * 为什么必须带换行：Robolectric 的 StaticLayout 对不含换行的 CJK 长文本
-     * 不做换行（实测 16100 字在 948px 宽度下只排出 3 行），拿它验证「页数随高度变化」
-     * 会得到恒为 1 页的假结果 —— 测试看似在跑，其实什么都没验证。
-     * 显式换行让每句成为独立行，排版行为才与真机一致。
-     *
-     * 行数也要够多：测试视口 1080×2200 大约一页放 22 行，
-     * 这里给到 600 行，页数对高度变化才足够敏感。
+     * 不做换行（实测 16100 字在 948px 宽度下只排出 3 行），
+     * 拿它验证「页数随高度变化」会得到恒为 1 页的假结果。
      */
     private val body = (1..600).joinToString("\n") { "第${it}句正文内容用来把这一章撑到足够长以便分出多页。" }
 
@@ -71,7 +73,6 @@ class ReaderInsetsPaginationTest {
         db.close()
     }
 
-    /** 只替换数据库，其余依赖保持真实实现。 */
     private fun container(): AppContainer = object : AppContainer(context) {
         override val database: MoyuDatabase get() = db
     }
@@ -83,7 +84,7 @@ class ReaderInsetsPaginationTest {
         return (result as ImportResult.Success).bookId
     }
 
-    /** 与真机接近：1080×2400 屏幕、3.0 密度，可用高度约 2200px。 */
+    /** 与真机接近：1080×2400 屏幕、3.0 密度。 */
     private val density = Density(density = 3f, fontScale = 1f)
     private val viewportWidth = 1080
     private val viewportHeight = 2200
@@ -91,10 +92,8 @@ class ReaderInsetsPaginationTest {
     /**
      * 轮询等待条件成立，期间不断推进主线程。
      *
-     * 为什么不能只 idle 几次：仓库查询走 `withContext(Dispatchers.IO)`，
-     * 在 Robolectric 里那是**真实线程池**，而 `idle()` 只推进主线程。
-     * 两者时序对不上 —— 一次性 idle 完时 IO 可能还没返回，主线程自然没有后续任务。
-     * 因此必须「让出真实时间 → 推进主线程」交替进行，直到条件成立或超时。
+     * 仓库查询走 `withContext(Dispatchers.IO)`，在 Robolectric 里那是真实线程池，
+     * 而 `idle()` 只推进主线程 —— 两者时序对不上，必须交替进行。
      */
     private fun waitUntil(what: String, timeoutMs: Long = 10_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -104,12 +103,9 @@ class ReaderInsetsPaginationTest {
             Thread.sleep(10)
         }
         shadowOf(Looper.getMainLooper()).idle()
-        if (!condition()) {
-            throw AssertionError("等待超时：$what")
-        }
+        if (!condition()) throw AssertionError("等待超时：$what")
     }
 
-    /** 把主线程任务跑干净（用于「不应有变化」这类否定断言）。 */
     private fun settle(times: Int = 20) {
         repeat(times) {
             shadowOf(Looper.getMainLooper()).idle()
@@ -118,39 +114,41 @@ class ReaderInsetsPaginationTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
 
-    /**
-     * 打开书、给定视口与安全区，返回分页结果。
-     * 每次都用全新的 ViewModel，避免上一轮的分页缓存影响结论。
-     */
-    private fun pageCount(topPx: Int, bottomPx: Int, bookId: String): Int {
+    /** 打开书 → 设定视口与正文区高度 → 返回分页结果。每次都用全新 ViewModel。 */
+    private fun pages(contentBoxHeight: Int, headerHeight: Int, bookId: String): Int {
         val vm = ReaderViewModel(container())
         vm.open(bookId, density)
         waitUntil("章节载入") { vm.currentChapter.value != null }
         vm.setViewport(viewportWidth, viewportHeight, density)
-        waitUntil("首次分页") { vm.pages.value.isNotEmpty() }
-        vm.setInsets(topPx, bottomPx, density)
+        vm.setContentBoxSize(viewportWidth, contentBoxHeight, density)
+        vm.setFirstPageHeaderHeight(headerHeight, density)
+        waitUntil("分页完成") { vm.pages.value.isNotEmpty() }
         settle()
         return vm.pages.value.size
     }
 
+    /** 模拟小米 14 量级的正文区：约 2380px（已扣页边距、系统栏与地脚）。 */
+    private val realWorldBox = 2380
+
     @Test
-    fun `加上安全区后页数必须增加`() {
+    fun `正文区越矮页数越多（安全区通过容器高度影响分页）`() {
         val repo = BookRepository(context, db, DocumentStore(context))
         val bookId = importBook(repo)
 
-        val noInset = pageCount(0, 0, bookId)
-        val withInset = pageCount(84, 48, bookId)
+        val tall = pages(contentBoxHeight = realWorldBox, headerHeight = 0, bookId = bookId)
+        // 少掉状态栏与手势条的高度（约 150px）应当多分出一页
+        val short = pages(contentBoxHeight = realWorldBox - 150, headerHeight = 0, bookId = bookId)
 
-        assertTrue("无安全区时应至少分出 2 页，实际 $noInset", noInset >= 2)
+        assertTrue("足够长的正文应分出多页，实际 $tall", tall >= 2)
         assertTrue(
-            "加上安全区后页数必须增加：无安全区 $noInset 页，有安全区 $withInset 页。" +
-                "页数没变说明安全区没有进入分页计算 —— 真机上就会出现末行被遮挡。",
-            withInset > noInset,
+            "正文区变矮必须导致页数增加：$realWorldBox px → $tall 页，" +
+                "${realWorldBox - 150} px → $short 页。页数没变说明容器高度没有进入分页计算。",
+            short > tall,
         )
     }
 
     @Test
-    fun `只改安全区也必须触发重新分页`() {
+    fun `正文区高度变化必须触发重新分页`() {
         val repo = BookRepository(context, db, DocumentStore(context))
         val bookId = importBook(repo)
 
@@ -158,21 +156,64 @@ class ReaderInsetsPaginationTest {
         vm.open(bookId, density)
         waitUntil("章节载入") { vm.currentChapter.value != null }
         vm.setViewport(viewportWidth, viewportHeight, density)
+        vm.setContentBoxSize(viewportWidth, realWorldBox, density)
         waitUntil("首次分页") { vm.pages.value.isNotEmpty() }
 
         val before = vm.pages.value.size
 
-        // 关键：只改安全区、不动视口尺寸。
-        // 若分页缓存键里漏了安全区，recomputePagination 会直接 return，页数原地不动。
-        vm.setInsets(84, 48, density)
-        waitUntil("安全区触发的重新分页") { vm.pages.value.size > before }
+        // 只改正文区高度，不动视口尺寸。
+        // 若分页缓存键里漏了它，recomputePagination 会直接 return，页数原地不动。
+        vm.setContentBoxSize(viewportWidth, realWorldBox - 200, density)
+        waitUntil("高度变化触发的重新分页") { vm.pages.value.size > before }
 
-        val after = vm.pages.value.size
-        assertTrue("只改安全区也必须重新分页：改前 $before 页，改后 $after 页", after > before)
+        assertTrue("改高度前 $before 页，改后 ${vm.pages.value.size} 页", vm.pages.value.size > before)
     }
 
     @Test
-    fun `重复上报相同安全区不会重复分页`() {
+    fun `章首页标题高度必须让首页少排几行`() {
+        val repo = BookRepository(context, db, DocumentStore(context))
+        val bookId = importBook(repo)
+
+        // 标题块约 177px（章节序号 + 大标题），相当于 2 行正文
+        val withoutHeader = pages(contentBoxHeight = realWorldBox, headerHeight = 0, bookId = bookId)
+        val withHeader = pages(contentBoxHeight = realWorldBox, headerHeight = 177, bookId = bookId)
+
+        // 首页少排 2 行，整章页数应当增加（或至少首页覆盖的字符变少）
+        assertTrue(
+            "首页标题应占掉正文空间：无标题 $withoutHeader 页，有标题 $withHeader 页。" +
+                "页数没变说明标题高度没有参与分页 —— 首页会多排几行，末行被裁掉。",
+            withHeader >= withoutHeader,
+        )
+
+        // 更直接的证据：有标题时首页的字符区间必须更短
+        val vm = ReaderViewModel(container())
+        vm.open(bookId, density)
+        waitUntil("章节载入") { vm.currentChapter.value != null }
+        vm.setViewport(viewportWidth, viewportHeight, density)
+        vm.setContentBoxSize(viewportWidth, realWorldBox, density)
+        vm.setFirstPageHeaderHeight(177, density)
+        waitUntil("分页完成") { vm.pages.value.isNotEmpty() }
+        val firstPageWithHeader = vm.pages.value.first()
+
+        val vm2 = ReaderViewModel(container())
+        vm2.open(bookId, density)
+        waitUntil("章节载入") { vm2.currentChapter.value != null }
+        vm2.setViewport(viewportWidth, viewportHeight, density)
+        vm2.setContentBoxSize(viewportWidth, realWorldBox, density)
+        vm2.setFirstPageHeaderHeight(0, density)
+        waitUntil("分页完成") { vm2.pages.value.isNotEmpty() }
+        val firstPageWithout = vm2.pages.value.first()
+
+        assertTrue(
+            "有标题时首页字符数必须更少：有标题 ${firstPageWithHeader.end - firstPageWithHeader.start} 字，" +
+                "无标题 ${firstPageWithout.end - firstPageWithout.start} 字",
+            (firstPageWithHeader.end - firstPageWithHeader.start) <
+                (firstPageWithout.end - firstPageWithout.start),
+        )
+    }
+
+    @Test
+    fun `重复上报相同高度不会重复分页`() {
         val repo = BookRepository(context, db, DocumentStore(context))
         val bookId = importBook(repo)
 
@@ -180,30 +221,39 @@ class ReaderInsetsPaginationTest {
         vm.open(bookId, density)
         waitUntil("章节载入") { vm.currentChapter.value != null }
         vm.setViewport(viewportWidth, viewportHeight, density)
-        vm.setInsets(84, 48, density)
+        vm.setContentBoxSize(viewportWidth, realWorldBox, density)
         waitUntil("首次分页") { vm.pages.value.isNotEmpty() }
 
         val pages = vm.pages.value
-        val firstPage = pages.first()
+        val first = pages.first()
 
-        // 同样的值再报一次：不应触发重算（否则每帧上报都会重新排版，明显卡顿）
-        vm.setInsets(84, 48, density)
+        // 同样的值再报一次不应触发重算：Composable 每次重组都会上报，
+        // 不做短路就会每帧重新排版，翻页明显卡顿。
+        vm.setContentBoxSize(viewportWidth, realWorldBox, density)
         settle()
 
         assertEquals("页数不应变化", pages.size, vm.pages.value.size)
-        assertEquals("首页区间不应变化", firstPage, vm.pages.value.first())
+        assertEquals("首页区间不应变化", first, vm.pages.value.first())
     }
 
     @Test
-    fun `负的安全区被夹到 0`() {
+    fun `高度为 0 的上报被忽略，不会把分页搞坏`() {
         val repo = BookRepository(context, db, DocumentStore(context))
         val bookId = importBook(repo)
 
-        val zero = pageCount(0, 0, bookId)
-        val negative = pageCount(-100, -100, bookId)
-        val normal = pageCount(84, 48, bookId)
+        val vm = ReaderViewModel(container())
+        vm.open(bookId, density)
+        waitUntil("章节载入") { vm.currentChapter.value != null }
+        vm.setViewport(viewportWidth, viewportHeight, density)
+        vm.setContentBoxSize(viewportWidth, realWorldBox, density)
+        waitUntil("首次分页") { vm.pages.value.isNotEmpty() }
 
-        assertEquals("负的安全区必须被夹到 0，等价于无安全区", zero, negative)
-        assertTrue("有安全区时页数应更多：normal=$normal zero=$zero", normal > zero)
+        val before = vm.pages.value.size
+
+        // 布局尚未完成时会报 0，这种情况必须被忽略（否则会退化成按 1px 高度分页）
+        vm.setContentBoxSize(viewportWidth, 0, density)
+        settle()
+
+        assertEquals("高度 0 的上报应被忽略", before, vm.pages.value.size)
     }
 }

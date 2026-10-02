@@ -1,6 +1,4 @@
-﻿package com.moyu.reader.ui.screens
-
-import com.moyu.reader.ui.theme.moyuPalette
+package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

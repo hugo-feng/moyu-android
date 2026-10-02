@@ -95,6 +95,10 @@ fun ReaderScreen(
     onExit: () -> Unit,
     onOpenSearch: (String) -> Unit,
     onOpenNotes: (String) -> Unit,
+    /** 打开后要跳到的章；null 表示沿用数据库里记录的上次位置 */
+    jumpToChapter: Int? = null,
+    /** 章内字符偏移，配合 jumpToChapter 使用 */
+    jumpToOffset: Int = 0,
 ) {
     val viewModel: ReaderViewModel = viewModel(factory = factory)
     val density = LocalDensity.current
@@ -129,9 +133,14 @@ fun ReaderScreen(
     val currentPage = pages.getOrNull(pageIndex)
 
     // 打开书籍：视口尺寸要等布局完成才知道，因此这里先触发一次 open
-    LaunchedEffect(bookId) {
+    LaunchedEffect(bookId, jumpToChapter, jumpToOffset) {
         viewModel.open(bookId, density)
         viewModel.resumeSession()
+        // 来自搜索/笔记的跳转目标：open 完成后按章与章内偏移定位。
+        // 不处理它的话，点搜索结果只会停在「上次读到的地方」。
+        if (jumpToChapter != null) {
+            viewModel.jumpToChapter(jumpToChapter, density, jumpToOffset)
+        }
     }
 
     // 常亮设置。
@@ -265,46 +274,65 @@ fun ReaderScreen(
         }
 
         // —— 手势层 ——
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(settings.pageMode, pages.size) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            // 水平滑动幅度交给 tap 手势判断，这里只做收尾
-                        },
-                    ) { _, dragAmount ->
-                        if (dragAmount < -60) {
-                            viewModel.flip(1, density)
-                        } else if (dragAmount > 60) {
-                            viewModel.flip(-1, density)
+        //
+        // 只在**分页模式**下注册：滚动模式的左右两半可以正常拖动/选中文字，
+        // 若也在这里响应点击，用户想点一下屏幕就会静默跳到下一章，
+        // 而屏幕上显示的还是滚动正文 —— 进度与实际脱节，且毫无提示。
+        if (settings.pageMode != PageMode.SCROLL) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    /**
+                     * 水平滑动翻页。
+                     *
+                     * 必须判断**累计位移**而不是单个事件的增量：
+                     * `dragAmount` 是每次 move 事件的位移，一次正常滑动会产生很多个
+                     * 超过阈值的 move，于是手指一划就连翻好几页。
+                     * 这里累加到 onDragEnd 时一次性判定，并且只翻一页。
+                     */
+                    .pointerInput(settings.pageMode, pages.size) {
+                        var accumulated = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { accumulated = 0f },
+                            onDragCancel = { accumulated = 0f },
+                            onDragEnd = {
+                                // 60dp 的滑动才算翻页：像素阈值在不同密度上手感差异太大
+                                val threshold = 60.dp.toPx()
+                                when {
+                                    accumulated <= -threshold -> viewModel.flip(1, density)
+                                    accumulated >= threshold -> viewModel.flip(-1, density)
+                                }
+                                accumulated = 0f
+                            },
+                        ) { _, dragAmount ->
+                            accumulated += dragAmount
                         }
                     }
-                }
-                .pointerInput(settings.pageMode) {
-                    detectTapGestures(
-                        onTap = { offset ->
-                            val width = size.width
-                            val third = width / 3f
-                            when {
-                                offset.x < third -> {
-                                    if (!chromeVisible) viewModel.flip(-1, density)
-                                }
+                    .pointerInput(settings.pageMode) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                val width = size.width
+                                val third = width / 3f
+                                when {
+                                    offset.x < third -> {
+                                        if (!chromeVisible) viewModel.flip(-1, density)
+                                    }
 
-                                offset.x > third * 2 -> {
-                                    if (!chromeVisible) viewModel.flip(1, density)
-                                }
+                                    offset.x > third * 2 -> {
+                                        if (!chromeVisible) viewModel.flip(1, density)
+                                    }
 
-                                else -> {
-                                    chromeVisible = !chromeVisible
-                                    if (!chromeVisible) sheet = ReaderSheet.NONE
+                                    else -> {
+                                        chromeVisible = !chromeVisible
+                                        if (!chromeVisible) sheet = ReaderSheet.NONE
+                                    }
                                 }
-                            }
-                        },
-                        onLongPress = { },
-                    )
-                },
-        )
+                            },
+                            onLongPress = { },
+                        )
+                    },
+            )
+        }
 
         // —— 顶部栏 ——
         if (chromeVisible) {
@@ -617,7 +645,21 @@ private fun PagedReader(
     }
 }
 
-/** 组装当前页的文本。逐段缩进 + 划线高亮。 */
+/**
+ * 组装当前页的文本。逐段缩进 + 段落间距 + 划线高亮。
+ *
+ * 两个容易出错的点：
+ *
+ * 1. **空行不能一律折叠成一个换行**。早先写的是「非首个元素前插一个 \n」，
+ *    而 `split('\n')` 会把空行变成空字符串，于是「段落之间的空行」与
+ *    「普通换行」被压成同一种东西 —— 用户调「段间距」完全没反应，
+ *    因为间距在渲染前就被丢掉了。现在按 paragraphSpacingMultiplier 决定插几个空行。
+ *
+ * 2. **高亮区间的偏移换算必须用源文本游标，不能用 AnnotatedString 的下标**。
+ *    缩进与空行只存在于渲染结果里，源文本里没有它们；
+ *    用 `builder.length` 去换算 `range`（它是相对源 Chapter 的偏移）
+ *    会随插入量累积漂移，划线越往后越偏。
+ */
 private fun buildPageText(
     pageText: String,
     settings: com.moyu.reader.data.prefs.ReaderSettings,
@@ -630,26 +672,37 @@ private fun buildPageText(
         ""
     }
 
+    // 段落之间插入的换行数：1 即维持原来的单空行，更大则更松散
+    val paragraphBreaks = settings.paragraphSpacingMultiplier
+        .coerceIn(0.5f, 3f)
+        .toInt()
+        .coerceAtLeast(1)
+
     val builder = androidx.compose.ui.text.AnnotatedString.Builder()
     var cursor = pageStart
     val lines = pageText.split('\n')
+    var firstEmitted = true
 
-    lines.forEachIndexed { index, rawLine ->
-        // 行首空白统一剥掉：否则会与首行缩进叠加成双倍缩进
-        val leading = rawLine.length - rawLine.trimStart().length
+    lines.forEach { rawLine ->
         val line = rawLine.trimStart()
-        val lineStart = cursor + leading
+        val leading = rawLine.length - line.length
+        // 这一行在源文本里的起始偏移（高亮换算的基准）
+        val sourceLineStart = cursor + leading
 
-        if (index > 0) builder.append("\n")
         if (line.isNotEmpty()) {
+            if (!firstEmitted) {
+                repeat(paragraphBreaks) { builder.append("\n") }
+            }
+            firstEmitted = false
+
             if (indent.isNotEmpty()) builder.append(indent)
             val contentStart = builder.length
             builder.append(line)
 
             // 划线高亮：把章内绝对区间换算成当前页内相对位置
             highlights.forEach { range ->
-                val from = (range.first - lineStart).coerceIn(0, line.length)
-                val to = (range.last + 1 - lineStart).coerceIn(0, line.length)
+                val from = (range.first - sourceLineStart).coerceIn(0, line.length)
+                val to = (range.last + 1 - sourceLineStart).coerceIn(0, line.length)
                 if (to > from) {
                     builder.addStyle(
                         SpanStyle(background = Color(0x338A6A46)),
@@ -659,6 +712,7 @@ private fun buildPageText(
                 }
             }
         }
+
         cursor += rawLine.length + 1
     }
     return builder.toAnnotatedString()
@@ -683,6 +737,8 @@ private fun ScrollReader(
 ) {
     val palette = moyuPalette()
     val scrollState = rememberScrollState()
+    val safeTop = com.moyu.reader.ui.safeTop
+    val safeBottom = com.moyu.reader.ui.safeBottom
 
     Box(
         modifier = Modifier
@@ -694,7 +750,12 @@ private fun ScrollReader(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(scrollState)
-                    .padding(vertical = (settings.marginDp * 0.9f).dp),
+                    // 滚动模式同样要让开系统栏：否则首行压状态栏、末行压手势条。
+                    // 纵向取「页边距」与「安全区」的较大值，与分页模式口径一致。
+                    .padding(
+                        top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
+                        bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
+                    ),
             ) {
                 Text(
                     text = buildPageText(content, settings, highlights, 0),

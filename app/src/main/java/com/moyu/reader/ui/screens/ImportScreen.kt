@@ -1,6 +1,4 @@
-﻿package com.moyu.reader.ui.screens
-
-import com.moyu.reader.ui.theme.moyuPalette
+package com.moyu.reader.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
