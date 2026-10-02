@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
+
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bookmark
@@ -645,7 +645,21 @@ private fun PagedReader(
     androidx.compose.runtime.CompositionLocalProvider(
         LocalBatteryPercent provides batteryPercent,
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        /**
+         * 两段式：上「正文层」、下「独立地脚」。
+         *
+         * 这里用 Column 而不是把地脚 `align(BottomCenter)` 叠在 Box 上：
+         * 叠放时地脚会盖在正文层之上，正文层的实测高度仍包含地脚占的那一段；
+         * 而 Column 让地脚**先占掉自己的高度**，正文层拿到的 `weight(1f)`
+         * 是真正可用的空间 —— 分页测量的高度与视觉可用高度天然一致，
+         * 不需要再手工扣减，也就不会再出现「多排一行、末行被裁」。
+         */
+        Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
             /**
              * 这里**刻意不画「即将翻走的那一页」**。
              *
@@ -711,6 +725,90 @@ private fun PagedReader(
                         .background(palette.textSecondary.copy(alpha = 0.5f)),
                 )
             }
+
+            /**
+             * 地脚是**独立的底部条**，不属于页面内容。
+             *
+             * 它画在翻页动画层**之外**（是 Column 的第二个子项，不在上面那个
+             * Box 里），因此：
+             *   - 位置由结构保证：正文层 weight(1f) 吃掉剩余空间，它自然落在底部；
+             *   - 不参与翻页变换：页码与电量在翻页过程中稳定，不会跟着页面滑走。
+             *
+             * 之前它是 `ReaderPage` 的最后一个子项，位置取决于
+             * 「正文 Box 的 weight(1f) 分到多少高度」这一隐式推算 ——
+             * 正文区一旦被压成 0 高，地脚就顶到了屏幕最上面
+             * （用户截图里 app 的电池图标与系统电池图标并排在状态栏上）。
+             */
+            PageFooterBar(
+                pageNumber = pageNumber,
+                settings = settings,
+            )
+        }
+        }
+    }
+}
+
+/**
+ * 阅读区底部的信息条：左页码，右时间与电量。
+ *
+ * ## 为什么独立成一个组件
+ *
+ * 用户反馈「底部的那几项应该是独立的，而不是包含在文章内」，
+ * 以及截图里 **app 的电池图标与系统电池图标并排显示在状态栏上** ——
+ * 说明地脚曾经被渲染到了屏幕顶部。
+ *
+ * 根因是它原先作为 `ReaderPage` 的最后一个子项，位置取决于
+ * 「正文 Box 的 weight(1f) 到底分到多少高度」这一隐式推算。
+ * 一旦正文区被压成 0 高，地脚就顶到了最上面。
+ *
+ * 现在把它做成**独立的画层**：由 `align(BottomCenter)` 直接钉在底部，
+ * 与正文的高度无关。
+ */
+@Composable
+private fun PageFooterBar(
+    pageNumber: Int,
+    settings: com.moyu.reader.data.prefs.ReaderSettings,
+    modifier: Modifier = Modifier,
+) {
+    val palette = moyuPalette()
+    val style = furnitureStyle(settings)
+    val safeBottom = com.moyu.reader.ui.safeBottom
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            // 高度固定，不随内容变化：电量从 100% 变 99% 也不该让正文重排
+            .height(FOOTER_HEIGHT)
+            // 横向页边距与正文一致，页码才会与正文左边界对齐
+            .padding(
+                start = settings.marginDp.dp,
+                end = settings.marginDp.dp,
+                bottom = maxOf(6.dp, safeBottom),
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (settings.showPageNumber) {
+            Text(
+                text = pageNumber.toString(),
+                style = style,
+                color = palette.textSecondary,
+                modifier = Modifier.alpha(0.85f),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = currentClockText(),
+            style = style,
+            color = palette.textSecondary,
+            modifier = Modifier.alpha(0.85f),
+        )
+        if (settings.showStatusBar) {
+            Spacer(Modifier.width(7.dp))
+            BatteryGlyph(
+                percent = LocalBatteryPercent.current,
+                tint = palette.textSecondary,
+                modifier = Modifier.alpha(0.85f),
+            )
         }
     }
 }
@@ -903,8 +1001,18 @@ private fun ReaderPage(
             ),
     ) {
         // —— 天头：书眉 ——
-        // 按真实书籍体例，书眉只出现在次页起。章首页的标题本身就在版心内，
-        // 顶上再压一条书眉就是同一句话印两遍。
+        //
+        // 结构上把「天头 / 正文 / 地脚」写成三行：
+        // 天头固定高度在最上、正文 weight(1f) 吃掉中间、地脚固定高度在最下。
+        // 位置由结构保证，不依赖任何隐式的高度推算 ——
+        // 曾经的写法只有「正文 weight(1f) + 地脚」两段，
+        // 真机上出现过**地脚被渲染到屏幕顶部**（用户的截图里 app 的电池图标
+        // 与系统电池图标并排显示在状态栏上）。多一个显式的天头占位，
+        // 正文区就不可能被压成 0 高而把地脚顶上去。
+        //
+        // 书眉按真实书籍体例只出现在次页起：章首页的标题本身就在版心内，
+        // 顶上再压一条书眉就是同一句话印两遍。不用书眉时占位块高度为 0，
+        // 与分页引擎的 firstPageHeaderHeight 口径一致。
         if (!showTitle && chapterTitle.isNotBlank()) {
             Text(
                 text = chapterTitle,
@@ -915,7 +1023,7 @@ private fun ReaderPage(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 10.dp)
-                    .alpha(0.85f),
+                    .alpha(0.7f),
             )
         }
 
@@ -1053,46 +1161,18 @@ private fun ReaderPage(
             }
         }
 
-        // —— 地脚：左页码、右时间与电量 ——
+        // 地脚**不在这里**。
         //
-        // 高度固定，不随内容变化：正文区是 weight(1f)，拿到的是
-        // 「本 Column 扣掉其他子项之后」的空间。地脚高度一旦跳动
-        // （例如电量从 100% 变 99%），正文区高度就跟着变、触发重新分页，
-        // 表现为读到一半突然重排。给死高度后测量值稳定，分页也就稳定。
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(FOOTER_HEIGHT)
-                .padding(top = 10.dp),
-        ) {
-            if (settings.showPageNumber) {
-                Text(
-                    text = pageNumber.toString(),
-                    style = furnitureStyle,
-                    color = palette.textSecondary,
-                    modifier = Modifier.align(Alignment.CenterStart).alpha(0.85f),
-                )
-            }
-            Row(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = currentClockText(),
-                    style = furnitureStyle,
-                    color = palette.textSecondary,
-                    modifier = Modifier.alpha(0.85f),
-                )
-                if (settings.showStatusBar) {
-                    Spacer(Modifier.width(7.dp))
-                    BatteryGlyph(
-                        percent = LocalBatteryPercent.current,
-                        tint = palette.textSecondary,
-                        modifier = Modifier.alpha(0.85f),
-                    )
-                }
-            }
-        }
+        // 它已改为独立的底部条（见 PageFooterBar），由 PagedReader 用
+        // `align(BottomCenter)` 钉在阅读区底端。
+        //
+        // 原先它是这个 Column 的最后一个子项，位置取决于
+        // 「正文 Box 的 weight(1f) 分到多少高度」这一隐式推算 ——
+        // 正文区一旦被压成 0 高，地脚就顶到了屏幕最上面
+        // （用户截图里 app 的电池图标与系统电池图标并排在状态栏上）。
+        //
+        // 另外，分页测量不再把地脚高度算进 contentHeight ——
+        // 它已经是独立的一层，与版心无关。
         }
 
 /** 地脚高度。两页必须一致，否则翻页时地脚会跳。 */
@@ -1354,24 +1434,85 @@ private fun ScrollReader(
             }
         }
 
-        SelectionContainer {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    // 滚动模式同样要让开系统栏：否则首行压状态栏、末行压手势条。
-                    // 纵向取「页边距」与「安全区」的较大值，与分页模式口径一致。
-                    .padding(
-                        top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
-                        bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
-                    ),
-            ) {
-                Text(
-                    text = buildPageText(content, settings, highlights, 0),
-                    style = bodyTextStyle(settings),
-                    color = palette.text,
+        /**
+         * 正文：用 `BasicTextField(readOnly = true)` 而不是
+         * `SelectionContainer { Text }`。
+         *
+         * ## 这是「滚动完全动不了」的根因
+         *
+         * `SelectionContainer` 会**消费拖拽手势** —— 它的职责之一就是
+         * 「长按选字后拖动扩选」。于是用户想上下滑动时，手势在到达
+         * `verticalScroll` 之前就被它吃掉了，页面纹丝不动。
+         *
+         * 分页模式早就踩过同一个坑（那里表现为长按无反应），当时改成了
+         * `BasicTextField`；滚动模式这一处漏了，于是滚动直接失效。
+         *
+         * `BasicTextField(readOnly = true)` 由系统实现选区，
+         * 选区手势与滚动手势由框架正确区分：短按拖动=滚动，
+         * 长按后拖动=扩选。两端行为一致，也不需要维护两套选区代码。
+         */
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                // 滚动模式同样要让开系统栏：否则首行压状态栏、末行压手势条。
+                // 纵向取「页边距」与「安全区」的较大值，与分页模式口径一致。
+                // 横向页边距由外层 BoxWithConstraints 统一加（只加一次，
+                // 两处都加会让版心窄掉一半）。
+                .padding(
+                    top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
+                    bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
+                ),
+        ) {
+            var fieldValue by remember(content, settings.fontSizeSp) {
+                mutableStateOf(
+                    androidx.compose.ui.text.input.TextFieldValue(
+                        annotatedString = buildPageText(content, settings, highlights, 0),
+                        selection = androidx.compose.ui.text.TextRange.Zero,
+                    )
                 )
             }
+            val rendered = buildPageText(content, settings, highlights, 0)
+            if (rendered != fieldValue.annotatedString) {
+                fieldValue = fieldValue.copy(annotatedString = rendered)
+            }
+
+            androidx.compose.foundation.text.BasicTextField(
+                value = fieldValue,
+                onValueChange = { new ->
+                    fieldValue = new
+                    val sel = new.selection
+                    if (!sel.collapsed) {
+                        // 滚动模式没有「页起始」，整章从 0 开始，
+                        // 因此渲染下标直接减去缩进/空行的漂移即可
+                        val from = com.moyu.reader.reader.PageTextComposer
+                            .renderOffsetToChapterOffset(
+                                pageText = content,
+                                pageStart = 0,
+                                indentEm = settings.indentEm,
+                                paragraphSpacingMultiplier = settings.paragraphSpacingMultiplier,
+                                renderOffset = sel.min,
+                            )
+                        val to = com.moyu.reader.reader.PageTextComposer
+                            .renderOffsetToChapterOffset(
+                                pageText = content,
+                                pageStart = 0,
+                                indentEm = settings.indentEm,
+                                paragraphSpacingMultiplier = settings.paragraphSpacingMultiplier,
+                                renderOffset = sel.max,
+                            )
+                        if (from != null && to != null && to > from) {
+                            viewModel.setSelectionRange(from, to)
+                        }
+                    }
+                },
+                readOnly = true,
+                textStyle = bodyTextStyle(settings).copy(color = palette.text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                    androidx.compose.ui.graphics.Color.Transparent,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

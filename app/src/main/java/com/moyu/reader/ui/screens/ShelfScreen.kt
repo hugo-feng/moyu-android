@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -126,12 +129,23 @@ fun ShelfScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(palette.surface),
-        // 书架是唯一没有顶栏的页面（内容直接顶到屏幕最上面），
-        // 因此状态栏的安全区必须它自己让出来，否则问候语和「我的书架」会被压住。
-        // 底部同时留出：底部导航栏高度 + 手势条，避免最后一行被遮。
+            .background(palette.surface)
+            /**
+             * 顶部让开状态栏。
+             *
+             * 应用用 `enableEdgeToEdge()` 全屏绘制（沉浸式），因此**每个页面
+             * 都必须自己让开系统栏**。书架是所有页面里唯一没有顶栏的
+             * （内容直接顶到屏幕最上面），最容易漏掉这一步 ——
+             * 用户反馈「书库完全没有适配全面屏的顶部状态栏保护」正是如此：
+             * 「书库」标题压在状态栏上。
+             *
+             * 用 `windowInsetsPadding(safeDrawing)` 而不是只加一个顶部 dp：
+             * 它同时覆盖状态栏、刘海/挖孔区与横屏时的侧边，且不同机型
+             * 高度不同，硬编码的数值在别的机器上一定不准。
+             */
+            .windowInsetsPadding(WindowInsets.safeDrawing),
         contentPadding = PaddingValues(
-            top = safeTop,
+            top = 6.dp,
             bottom = 80.dp + safeBottom,
         ),
     ) {
@@ -201,15 +215,28 @@ fun ShelfScreen(
             item {
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val gap = 12.dp
-                    val available = maxWidth - 28.dp
+                    val horizontalPadding = 28.dp
+                    val available = maxWidth - horizontalPadding
                     val minColumn = 148.dp
                     val columns = (((available + gap) / (minColumn + gap)).toInt()).coerceIn(2, 3)
-
-                    // 与书籍网格同样的做法：把列宽算出来传给卡片，
-                    // 让封面高度由确定宽度推出，而不是靠 aspectRatio 猜。
-                    // 分组卡片里有两行缩略图，因此格子高度还要再除以 2。
                     val groupColumnWidth = (available - gap * (columns - 1)) / columns
-                    val thumbHeight = (groupColumnWidth - 16.dp - 4.dp) / 2f * 4.3f / 3f
+
+                    /**
+                     * 缩略图高度用**固定值**，不再按列宽与宽高比推算。
+                     *
+                     * ## 为什么放弃推算
+                     *
+                     * 之前是 `(列宽 − 内边距) / 2 × 4.3/3`，看起来合理，
+                     * 但真机上分组卡只显示出一块色块，**名称与「共 N 本」被裁掉**。
+                     * 推算链路太长（列宽 → 减内边距 → 除 2 → 乘宽高比），
+                     * 其中任何一步与实际渲染不符，结果就整体偏大、把文字挤出卡片。
+                     *
+                     * 分组卡里的缩略图只是「这个分组大概有什么书」的示意，
+                     * 不需要精确的封面比例。给一个固定的 46.dp 高度：
+                     * 两行共 96.dp，加上名称与本数约 40.dp，
+                     * 卡片总高约 150.dp —— 无论屏幕多宽都不会溢出。
+                     */
+                    val thumbHeight = 46.dp
 
                     androidx.compose.foundation.layout.FlowRow(
                         modifier = Modifier
@@ -596,6 +623,11 @@ private fun GroupCard(
                     }
                 }
             }
+
+            // 名称与本数。它们必须在缩略图**之下**、且卡片高度足够容纳 ——
+            // 之前因为缩略图高度被算大，这两行被挤出了卡片，用户看到的就是
+            // 「只有一个色块，什么字都没有」。
+            Spacer(Modifier.height(6.dp))
 
             if (renaming) {
                 androidx.compose.material3.OutlinedTextField(
