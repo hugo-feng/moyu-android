@@ -116,6 +116,29 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
     val shelfCount: StateFlow<Int> =
         bookRepo.shelfCount.stateIn(scope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    /** 书库里的全部书（含未加入书架的）。详情页用它兜底查找。 */
+    val libraryItems: StateFlow<List<ShelfItem>> =
+        bookRepo.libraryItems.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * 详情页要显示的章节目录（只有标题，不含正文）。
+     *
+     * 按需加载而不是让 shelfItems 带上：目录只有「打开某本书的详情页」
+     * 才需要，而 shelfItems 是列表页每本书都要用的。
+     * 混在一起会让列表页白白查一遍章节表。
+     */
+    private val _tocTree = MutableStateFlow<List<com.moyu.reader.data.model.ChapterHeader>>(emptyList())
+    val tocTree: StateFlow<List<com.moyu.reader.data.model.ChapterHeader>> = _tocTree.asStateFlow()
+
+    private var tocLoadedFor: String? = null
+
+    suspend fun loadToc(bookId: String) {
+        // 同一本书不重复加载：LaunchedEffect 在重组时可能再次触发
+        if (tocLoadedFor == bookId) return
+        tocLoadedFor = bookId
+        _tocTree.value = runCatching { bookRepo.getChapterHeaders(bookId) }.getOrDefault(emptyList())
+    }
+
     /** 「继续阅读」：最近在读且未读完的那本。 */
     val continueReading: StateFlow<ShelfItem?> =
         bookRepo.libraryItems
@@ -301,6 +324,23 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
             if (_filter.value == ShelfFilter.Group(groupId)) _filter.value = ShelfFilter.All
             if (_openGroupId.value == groupId) _openGroupId.value = null
             _message.value = "已删除分组"
+        }
+    }
+
+    /**
+     * 重命名分组。
+     *
+     * 只改名字，不动颜色、不动归属 —— 用户长按分组卡片选「重命名」
+     * 想要的只是换个名字，不该顺带改变任何别的东西。
+     */
+    fun renameGroup(groupId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        val existing = groups.value.firstOrNull { it.id == groupId } ?: return
+        if (existing.name == trimmed) return
+        scope.launch {
+            groupRepo.rename(groupId, trimmed)
+            _message.value = "已重命名为「$trimmed」"
         }
     }
 

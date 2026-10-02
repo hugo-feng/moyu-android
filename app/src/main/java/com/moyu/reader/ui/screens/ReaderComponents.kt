@@ -113,9 +113,22 @@ fun ReaderTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconAction(Icons.AutoMirrored.Filled.ArrowBack, "返回书架", onBack)
+        /**
+         * 书名与章节名**左对齐**。
+         *
+         * 原先这里是 `horizontalAlignment = CenterHorizontally`，
+         * 于是两行文字在剩余空间里居中 —— 但左右两侧的按钮数量不同
+         * （左边一个返回，右边三个），居中之后视觉上明显偏左，
+         * 看起来就像「没有对齐」。用户明确指出了这一点。
+         *
+         * 改成左对齐：书名紧接着返回按钮开始，与下方正文的左边界
+         * 基本对齐，读起来更稳。
+         */
         Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 6.dp),
+            horizontalAlignment = Alignment.Start,
         ) {
             Text(
                 text = bookTitle,

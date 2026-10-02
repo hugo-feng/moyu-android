@@ -1,4 +1,4 @@
-package com.moyu.reader.reader
+﻿package com.moyu.reader.reader
 
 import android.graphics.Typeface
 import android.text.Layout
@@ -233,18 +233,56 @@ object PaginationEngine {
      * 早先靠把行高估大（fontSize × 行距倍数，比字体自然行高大约 30%）
      * 侥幸掩盖了这个差异，但它依赖字体度量恰好落在某个范围 ——
      * 换字体或换字号就可能失效，不能算修好。两侧口径一致才是正解。
+     *
+     * ## 行高为什么不用 setLineSpacing
+     *
+     * 曾经试过在这里按「期望行高 − 自然行高」补额外行距，让两侧行高一致。
+     * 结果是**分页死循环**：加了 extra 之后布局高度随 extra 放大，
+     * 而 `metrics.lineHeight` 仍是调用方给的「字号 × 倍率」，
+     * 两者脱节 —— 引擎以为一页能放 10 行，实际那 10 行远超容器高度，
+     * 回退循环于是永远退不到一个能装下的行数。
+     *
+     * 正确做法是让**调用方**先算出「引擎与渲染共同认可的行高」，
+     * 再通过 `Metrics.lineHeight` 传进来（见 [effectiveLineHeight]）。
+     * 这样这里只需原样使用字体自然行高，不需要再叠一层额外间距。
      */
-    private fun buildLayout(text: String, width: Int, paint: TextPaint): StaticLayout =
-        StaticLayout.Builder
-            .obtain(text, 0, text.length, paint, width)
-            // 与阅读器显示保持一致的对齐与断行策略，
-            // 否则「分页算出来的行」和「画出来的行」会对不上
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, 1f)
-            .setIncludePad(false)
-            .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
-            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
-            .build()
+    private fun buildLayout(
+        text: String,
+        width: Int,
+        paint: TextPaint,
+    ): StaticLayout = StaticLayout.Builder
+        .obtain(text, 0, text.length, paint, width)
+        // 与阅读器显示保持一致的对齐与断行策略，
+        // 否则「分页算出来的行」和「画出来的行」会对不上
+        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+        .setLineSpacing(0f, 1f)
+        .setIncludePad(false)
+        .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
+        .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+        .build()
+
+    /**
+     * 引擎与渲染**共同认可**的行高。
+     *
+     * ## 为什么需要这个函数
+     *
+     * 设置里的「行距」是一个倍率，界面上按 `字号 × 倍率` 显示。
+     * 但两边实际排版时都不能小于**字体的自然行高**：
+     *   - `StaticLayout` 不支持负的额外行距，行高压不到自然行高以下；
+     *   - Compose 的 `TextStyle.lineHeight` 只是下限，字体度量更大时以度量为准。
+     *
+     * 于是当用户把行距调到很小时，「显示的行距」与实际行高不一致 ——
+     * 引擎按小的那个算行数，渲染按大的那个画，两侧就此错位：
+     * 每页底部空出一大块，而断点也跟着挪到句子中间。
+     * 这正是用户反馈的「明明最底部还有很多空间，句子却被切开」。
+     *
+     * 取两者较大值，两侧口径就统一了。
+     */
+    fun effectiveLineHeight(paint: TextPaint, desiredLineHeightPx: Float): Float {
+        val natural = naturalLineHeight(paint)
+        if (!desiredLineHeightPx.isFinite() || desiredLineHeightPx <= 0f) return natural
+        return maxOf(desiredLineHeightPx, natural)
+    }
 
     /**
      * 取第 `line` 行的行尾，但**至少保证第一行**。
@@ -292,6 +330,31 @@ object PaginationEngine {
         // letterSpacing 在 StaticLayout 里通过 TextPaint 的 letterSpacing 生效
         this.letterSpacing = letterSpacingEm
         this.isSubpixelText = true
+    }
+
+    /**
+     * 字体在**不给任何额外行距**时的自然行高。
+     *
+     * `StaticLayout` 的行高 = 自然行高 + extra，所以要让渲染侧的行高
+     * 与分页侧一致，就必须先知道自然行高是多少（它随字体而变，
+     * CJK 字体约为字号的 1.15~1.2 倍，不同字体差别不小）。
+     *
+     * 返回值**保证是有限正数**。这一点不是防御性编程，而是踩过的坑：
+     * 某些字体（尤其测试环境的默认字体）度量可能缺失，`descent - ascent`
+     * 会得到 NaN。NaN 传进 `setLineSpacing` 会让整个布局的高度失效，
+     * 于是回退循环永远退不到一个可用的行尾 —— **分页直接死循环**，
+     * 测试进程被 OOM 杀掉，现象是「Gradle Test Executor 非零退出」，
+     * 而不是任何一条断言失败，极难定位。
+     */
+    fun naturalLineHeight(paint: TextPaint): Float {
+        val fm = paint.fontMetrics
+        val raw = fm.descent - fm.ascent + fm.leading
+        if (!raw.isFinite() || raw <= 0f) {
+            // 退化时用「字号 × 1.2」兜底：CJK 字体的常见自然行高比例
+            val fallback = paint.textSize * 1.2f
+            return if (fallback.isFinite() && fallback > 0f) fallback else 1f
+        }
+        return raw
     }
 
     /**

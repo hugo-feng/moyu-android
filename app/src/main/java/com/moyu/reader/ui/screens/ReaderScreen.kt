@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -361,8 +361,32 @@ fun ReaderScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(settings.pageMode) {
+                    /**
+                     * 这一层是**盖在整个阅读区之上**的点击层。
+                     *
+                     * ## 滚动模式为什么会「一滚就弹出控制栏」
+                     *
+                     * `detectTapGestures` 判定点击的依据是「按下后短时间内抬起」，
+                     * 它**不关心中间移动了多远**。滚动恰恰是「按下 → 移动 → 抬起」，
+                     * 于是每一次滑动都被它当成一次点击，立刻切换了工具栏。
+                     * 用户的原话是「滚动模式直接失效，滚动操作直接唤起了控制栏」。
+                     *
+                     * 修法是记录按下与抬起的位移：超过 `touchSlop` 就认定这是滑动，
+                     * 不当作点击。`touchSlop` 用系统值而不是自己写死像素 ——
+                     * 不同密度的判定阈值本来就不同。
+                     */
+                    var downAt: androidx.compose.ui.geometry.Offset? = null
                     detectTapGestures(
+                        onPress = { pos -> downAt = pos },
                         onTap = { offset ->
+                            val start = downAt
+                            downAt = null
+                            // 位移超过系统触摸阈值 → 这是滑动，不是点击
+                            val slop = viewConfiguration.touchSlop
+                            val moved = start != null &&
+                                (offset - start).getDistance() > slop
+                            if (moved) return@detectTapGestures
+
                             val width = size.width
                             val third = width / 3f
                             val middleOnly = settings.pageMode == PageMode.SCROLL
@@ -1181,7 +1205,41 @@ private fun bodyTextStyle(settings: com.moyu.reader.data.prefs.ReaderSettings): 
     letterSpacing = settings.letterSpacingEm.sp,
     fontWeight = if (settings.bold) FontWeight.Medium else FontWeight.Normal,
     textAlign = if (settings.justify) TextAlign.Justify else TextAlign.Start,
+    /**
+     * 断行策略。
+     *
+     * 默认的 `LineBreak.Simple` 允许在**任意字符之间**断行，
+     * 于是一句完整的句子会被从中间切开 —— 用户反馈的
+     * 「为什么书籍分页会把一句完整的句子从中间切开分到两页」正是这个原因。
+     *
+     * `LineBreak.Paragraph` 会遵守基本排版规则（标点不落行首、优先在标点与
+     * 词边界处断），中文阅读体验接近纸质书。
+     * 分页引擎用的是 `BREAK_STRATEGY_HIGH_QUALITY`，两者同为「质量优先」，
+     * 因此分页算出的行尾与真正画出来的行尾一致。
+     */
+    lineBreak = androidx.compose.ui.text.style.LineBreak.Paragraph,
     platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+    /**
+     * 行高必须**显式等于**分页引擎使用的那一个值。
+     *
+     * ## 为什么不能让 Compose 自己按字体度量算
+     *
+     * 分页引擎那边用 `setLineSpacing(0f, 1f)`，行距由**字体的自然行高**决定
+     * （CJK 字体通常是字号的 1.15~1.2 倍）；而这里给的是
+     * `字号 × lineHeightMultiplier`（默认约 1.6，明显更大）。
+     *
+     * 两者一旦不同，同一个 `contentHeight` 里「引擎以为能放 10 行、
+     * 实际画出来 10 行占的高度远超容器」——分页的回退循环于是不断减行，
+     * 最终每页实际用掉的高度远小于容器，**底部空出一大块**，
+     * 而句子又因为断点跟着回退而落在奇怪的位置。
+     *
+     * 这一条与分页引擎里的 `lineHeightPx = textSizePx * lineHeightMultiplier`
+     * 是同一个公式，改一处必须改另一处。
+     */
+    lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+        alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+        trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.None,
+    ),
 )
 
 /** 滚动阅读模式。 */

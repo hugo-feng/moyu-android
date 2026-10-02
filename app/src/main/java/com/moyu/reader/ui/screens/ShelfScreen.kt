@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -209,6 +209,12 @@ fun ShelfScreen(
                     val minColumn = 148.dp
                     val columns = (((available + gap) / (minColumn + gap)).toInt()).coerceIn(2, 3)
 
+                    // 与书籍网格同样的做法：把列宽算出来传给卡片，
+                    // 让封面高度由确定宽度推出，而不是靠 aspectRatio 猜。
+                    // 分组卡片里有两行缩略图，因此格子高度还要再除以 2。
+                    val groupColumnWidth = (available - gap * (columns - 1)) / columns
+                    val thumbHeight = (groupColumnWidth - 16.dp - 4.dp) / 2f * 4.3f / 3f
+
                     androidx.compose.foundation.layout.FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -220,18 +226,17 @@ fun ShelfScreen(
                         groupCards.forEach { group ->
                             GroupCard(
                                 group = group,
+                                thumbHeight = thumbHeight,
                                 onClick = { viewModel.openGroup(group.id) },
-                                onDelete = if (group.id == ShelfViewModel.ALL_GROUP_ID) {
-                                    null
-                                } else {
-                                    { viewModel.deleteGroup(group.id) }
-                                },
-                                modifier = Modifier.weight(1f),
+                                onDelete = { viewModel.deleteGroup(group.id) },
+                                onRename = { newName -> viewModel.renameGroup(group.id, newName) },
+                                modifier = Modifier.width(groupColumnWidth),
                             )
                         }
                         NewGroupCard(
+                            thumbsHeight = thumbHeight * 2 + 4.dp,
                             onCreate = { name -> viewModel.createGroup(name) },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.width(groupColumnWidth),
                         )
                     }
                 }
@@ -307,6 +312,28 @@ fun ShelfScreen(
                     val minColumn = 104.dp
                     val columns = (((available + gap) / (minColumn + gap)).toInt()).coerceAtLeast(1)
 
+                    /**
+                     * **把每列的宽度算出来，显式传给封面。**
+                     *
+                     * 这是「只有色块、书名看不见」的根因修复。
+                     *
+                     * 之前给封面的是 `Modifier.weight(1f)` + 内部 `aspectRatio`：
+                     * `aspectRatio` 需要有**确定的宽度约束**才能算出高度，
+                     * 而 FlowRow 的子项在测量时宽度还是「未定」，
+                     * 它便退化成 Pinterest 模式（用高度反推宽度），
+                     * 算出一个接近正方形的块。
+                     *
+                     * 那个方块比正常封面（3:4.3）高得多，把下面的书名与格式角标
+                     * **挤出了卡片容器** —— 用户看到的就是「一个纯色矩形，什么字都没有」。
+                     *
+                     * 现在直接算：可用宽度减去所有间隔，再平分。
+                     * 宽度确定之后 `height(封面宽 × 4.3/3)` 也就确定了，
+                     * 高度不再依赖任何隐式测量。
+                     */
+                    val gapTotal = gap * (columns - 1)
+                    val columnWidth = (available - gapTotal) / columns
+                    val coverHeight = columnWidth * 4.3f / 3f
+
                     androidx.compose.foundation.layout.FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -324,7 +351,8 @@ fun ShelfScreen(
                                 onToggleShelf = { onToggleShelf(item.book) },
                                 groups = groups,
                                 onAssignGroup = { gid -> viewModel.assignToGroup(item.book, gid) },
-                                modifier = Modifier.weight(1f),
+                                columnWidth = columnWidth,
+                                coverHeight = coverHeight,
                             )
                         }
                     }
@@ -567,97 +595,162 @@ private fun ShelfTitleRow(
  * 形态参考番茄小说：用「一组书的缩略图」表达一个分组，
  * 比一行文字标签更容易一眼分辨 —— 用户认封面比认名字快。
  *
- * 缩略图用固定的小尺寸 + 封面自身的渐变，**不复用完整的 BookCover**：
- * 那个组件带进度条、格式角标、「加入书架」按钮，缩到 40dp 宽全都看不清，
- * 反而变成一团噪声。
+ * ## 长按管理
+ *
+ * 长按弹出菜单：重命名 / 删除。「全部」这个内置分组不可改名删除
+ * （它是所有书的总入口，删掉就再也看不到全部书了）。
+ *
+ * 尺寸由外层算好传进来：封面用固定宽高，不依赖 aspectRatio ——
+ * 那在宽度约束未定时会退化成正方形，把名称与本数挤出卡片。
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun GroupCard(
     group: ShelfGroup,
+    thumbHeight: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
     onDelete: (() -> Unit)?,
+    onRename: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
-    var confirmDelete by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var newName by remember(group.name) { mutableStateOf(group.name) }
 
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(palette.card)
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-    ) {
-        // 2 列缩略图。用 Row/Column 手动排而不是 LazyVerticalGrid：
-        // 只有 4 个固定格子，嵌套一个可滚动容器只会带来测量问题。
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            repeat(2) { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    repeat(2) { col ->
-                        val book = group.previewBooks.getOrNull(row * 2 + col)
-                        GroupThumb(book = book, modifier = Modifier.weight(1f))
+    /** 「全部」是内置分组：不提供改名与删除。 */
+    val manageable = group.id != ShelfViewModel.ALL_GROUP_ID
+
+    Box {
+        Column(
+            modifier = modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(palette.card)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { if (manageable) menuOpen = true },
+                )
+                .padding(8.dp),
+        ) {
+            // 2 列缩略图。用 Row/Column 手动排而不是 LazyVerticalGrid：
+            // 只有 4 个固定格子，嵌套一个可滚动容器只会带来测量问题。
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(2) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        repeat(2) { col ->
+                            val book = group.previewBooks.getOrNull(row * 2 + col)
+                            GroupThumb(
+                                book = book,
+                                height = thumbHeight,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
+
+            if (renaming) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    MoyuTextButton(
+                        text = "保存",
+                        enabled = newName.isNotBlank(),
+                        onClick = {
+                            onRename(newName.trim())
+                            renaming = false
+                        },
+                    )
+                    MoyuTextButton(text = "取消", onClick = { renaming = false })
+                }
+            } else {
+                Row(
+                    modifier = Modifier.padding(top = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (group.color != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(parseHexColor(group.color) ?: palette.primary),
+                        )
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        text = group.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    text = "共 ${group.count} 本",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    maxLines = 1,
+                )
+            }
         }
 
-        Row(
-            modifier = Modifier.padding(top = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (group.color != null) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(parseHexColor(group.color) ?: palette.primary),
+        if (menuOpen) {
+            androidx.compose.material3.DropdownMenu(
+                expanded = true,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("重命名", style = MaterialTheme.typography.bodySmall) },
+                    onClick = {
+                        renaming = true
+                        menuOpen = false
+                    },
                 )
-                Spacer(Modifier.width(5.dp))
-            }
-            Text(
-                text = group.name,
-                style = MaterialTheme.typography.bodySmall,
-                color = palette.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (onDelete != null) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = {
+                        Text(
+                            "删除分组",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFD9584A),
+                        )
+                    },
+                    onClick = {
+                        onDelete?.invoke()
+                        menuOpen = false
+                    },
+                )
                 Text(
-                    text = if (confirmDelete) "确认" else "✕",
+                    text = "删除分组不会删书",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (confirmDelete) Color(0xFFD9584A) else palette.textSecondary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            if (confirmDelete) {
-                                onDelete()
-                                confirmDelete = false
-                            } else {
-                                confirmDelete = true
-                            }
-                        }
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 )
             }
         }
-        Text(
-            text = if (confirmDelete) "会删掉分组，书不受影响" else "共 ${group.count} 本",
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.textSecondary,
-            maxLines = 1,
-        )
     }
 }
 
 /** 分组卡片里的一个小缩略封面；[book] 为 null 时画一个空格子占位。 */
 @Composable
-private fun GroupThumb(book: com.moyu.reader.data.model.Book?, modifier: Modifier = Modifier) {
+private fun GroupThumb(
+    book: com.moyu.reader.data.model.Book?,
+    height: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+) {
     val palette = moyuPalette()
-    // 底色分两种类型（Brush / Color），必须用 if 包住整个 background 调用 ——
-    // 写成 background(if (...) gradient else color) 推不出公共类型，编译不过。
+    // 高度由外层按列宽算好传入 —— 不再用 aspectRatio。
+    // 在 Row + weight 里 aspectRatio 拿不到确定宽度，会退化成正方形，
+    // 于是两行缩略图把分组名与本数挤出卡片（用户看到的「只有色块」）。
     val base = modifier
-        .aspectRatio(3f / 4.3f)
+        .height(height)
         .clip(RoundedCornerShape(4.dp))
     Box(
         modifier = if (book != null) {
@@ -685,6 +778,8 @@ private fun GroupThumb(book: com.moyu.reader.data.model.Book?, modifier: Modifie
 /** 「新建分组」卡片：点开后在原位变成输入框，不弹对话框。 */
 @Composable
 private fun NewGroupCard(
+    /** 与 GroupCard 的缩略图区等高，两种卡片在同一行里才对得齐。 */
+    thumbsHeight: androidx.compose.ui.unit.Dp,
     onCreate: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -700,11 +795,12 @@ private fun NewGroupCard(
             .padding(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // 与 GroupCard 的缩略图区等高，这样两种卡片在同一行里高度一致
+        // 高度直接给定值（缩略图两行 + 中间间隔），与 GroupCard 严丝合缝。
+        // 原先用 aspectRatio(2f/1.46f)，同样有「宽度未定就退化」的问题。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(2f / 1.46f),
+                .height(thumbsHeight),
             contentAlignment = Alignment.Center,
         ) {
             if (creating) {
@@ -771,9 +867,13 @@ private fun parseHexColor(hex: String): Color? = try {
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BookGridCard(    item: com.moyu.reader.data.model.ShelfItem,
+private fun BookGridCard(
+    item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
     onToggleShelf: () -> Unit,
+    /** 由外层 BoxWithConstraints 算好的确定宽度 —— 不再依赖 aspectRatio 去猜。 */
+    columnWidth: androidx.compose.ui.unit.Dp,
+    coverHeight: androidx.compose.ui.unit.Dp,
     groups: List<com.moyu.reader.data.model.BookGroup> = emptyList(),
     onAssignGroup: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -783,6 +883,7 @@ private fun BookGridCard(    item: com.moyu.reader.data.model.ShelfItem,
 
     Column(
         modifier = modifier
+            .width(columnWidth)
             .clip(RoundedCornerShape(10.dp))
             /**
              * 长按弹分组菜单，点击进书。
@@ -838,7 +939,9 @@ private fun BookGridCard(    item: com.moyu.reader.data.model.ShelfItem,
             percent = item.percent,
             finished = item.finished,
             unread = item.unread,
-            width = null,
+            // 宽度与高度都由外层算好，封面不再自己推尺寸
+            width = columnWidth,
+            fixedHeight = coverHeight,
         )
         Text(
             text = item.book.title,
@@ -965,26 +1068,43 @@ fun BookCover(
     finished: Boolean = false,
     unread: Boolean = false,
     width: androidx.compose.ui.unit.Dp? = 104.dp,
+    /**
+     * 封面的确定高度。
+     *
+     * ## 为什么必须能指定高度
+     *
+     * `aspectRatio` 要有**确定的宽度约束**才能算出高度。但在 `weight(1f)`
+     * 或 `FlowRow` 的子项里，宽度约束在测量时还没定下来，
+     * `aspectRatio` 便退化成 Pinterest 模式（用高度反推宽度），
+     * 算出一个接近正方形的块 ——
+     * 用户看到的就是「只有色块」，而且这个方块把下面的书名、格式角标
+     * **挤出了容器**，所以书名也看不见。
+     *
+     * 调用方若能给出确定高度（详情页、分组缩略图），传进来最可靠；
+     * 不传时才回退到 aspectRatio。
+     */
+    fixedHeight: androidx.compose.ui.unit.Dp? = null,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
     val shape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
 
+    // 尺寸修饰符按「宽度先定、高度再定」的顺序拼。
+    // 关键：**不要在宽度已确定时再叠 fillMaxWidth()** ——
+    // 那会把 width 的约束覆盖掉，等于白设。
+    val sizeModifier = if (fixedHeight != null) {
+        Modifier
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .height(fixedHeight)
+    } else {
+        Modifier
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+    }
+
     Box(
         modifier = modifier
-            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
-            /**
-             * 必须显式 `fillMaxWidth()` 再 `aspectRatio`，不能只靠上面的分支。
-             *
-             * `aspectRatio` 要有**确定的宽度约束**才能算出高度。网格里传的是
-             * `width = null`（即 fillMaxWidth），看起来一样，但如果外层是
-             * `weight(1f)` 这类由父级先分配、再测量子级的容器，
-             * 宽度约束在测量时可能还是「未定」，`aspectRatio` 便算出异常高度 ——
-             * 实测表现是封面被撑成很高的色块，**书名与格式角标被挤出可视区**，
-             * 用户看到的就是「一个纯色矩形，什么字都没有」。
-             */
-            .fillMaxWidth()
-            .aspectRatio(3f / 4.3f)
+            .then(sizeModifier)
+            .then(if (fixedHeight == null) Modifier.aspectRatio(3f / 4.3f) else Modifier)
             .clip(shape)
             .background(coverGradient(book.title)),
     ) {

@@ -139,14 +139,19 @@ class GroupRepository(private val database: MoyuDatabase) {
         group
     }
 
-    suspend fun rename(id: String, name: String, color: String) = withContext(Dispatchers.IO) {
+    /**
+     * 重命名分组。
+     *
+     * 只改名字：颜色与原创建时间从现有记录里取回来保留。
+     *
+     * 之前的写法是让调用方传 color 并用 `System.currentTimeMillis()` 填 createdAt ——
+     * 那会把「创建时间」改成「改名时间」，而分组列表是按 created_at 排序的，
+     * 于是改一次名字，分组就会跳到列表最后。这个坑在真机上很难联想到是改名造成的。
+     */
+    suspend fun rename(id: String, name: String) = withContext(Dispatchers.IO) {
+        val existing = groupDao.getAll().firstOrNull { it.id == id } ?: return@withContext
         groupDao.upsert(
-            com.moyu.reader.data.db.BookGroupEntity(
-                id = id,
-                name = name.trim(),
-                color = color,
-                createdAt = System.currentTimeMillis(),
-            )
+            existing.copy(name = name.trim()),
         )
     }
 

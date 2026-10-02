@@ -40,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.SettingsViewModel
 import com.moyu.reader.ui.safeDrawingBottomPadding
+import com.moyu.reader.ui.screens.BookDetailScreen
 import com.moyu.reader.ui.screens.HistoryScreen
 import com.moyu.reader.ui.screens.ImportScreen
 import com.moyu.reader.ui.screens.NotesScreen
@@ -101,6 +102,17 @@ object Routes {
 
     fun bookNotes(bookId: String) = "bookNotes/$bookId"
 
+    /**
+     * 书籍详情页。
+     *
+     * 书库里点一本书先到这里，而不是直接进阅读器 ——
+     * 详情页承担「加入书架 / 目录 / 笔记 / 删除 / 开始阅读」这些决策，
+     * 是打通「书库 → 书架」的关键一步。
+     */
+    const val BOOK_DETAIL = "bookDetail/{bookId}"
+
+    fun bookDetail(bookId: String) = "bookDetail/$bookId"
+
     fun search(bookId: String? = null) =
         if (bookId == null) "search" else "search?bookId=$bookId"
 }
@@ -149,7 +161,10 @@ fun MoyuApp(
                 ShelfScreen(
                     factory = factory,
                     libraryMode = true,
-                    onOpenBook = { bookId -> navController.navigate(Routes.reader(bookId)) },
+                    // 书库里点书 → 详情页（而不是直接进阅读器）。
+                    // 直接进阅读器的话，用户永远没有机会「加入书架」——
+                    // 这正是先前「完全没有方法把书籍从书库导入书架内」的原因。
+                    onOpenBook = { bookId -> navController.navigate(Routes.bookDetail(bookId)) },
                     onOpenSearch = { bookId -> navController.navigate(Routes.search(bookId)) },
                     onOpenImport = { navController.navigate(Routes.IMPORT) },
                     onOpenStats = { navController.navigate(Routes.STATS) },
@@ -161,11 +176,30 @@ fun MoyuApp(
                 ShelfScreen(
                     factory = factory,
                     libraryMode = false,
+                    // 书架上已经是用户挑过的书，点击直接读，少一次跳转
                     onOpenBook = { bookId -> navController.navigate(Routes.reader(bookId)) },
                     onOpenSearch = { bookId -> navController.navigate(Routes.search(bookId)) },
                     onOpenImport = { navController.navigate(Routes.IMPORT) },
                     onOpenStats = { navController.navigate(Routes.STATS) },
                     onOpenNotes = { bookId -> navController.navigate(Routes.bookNotes(bookId)) },
+                )
+            }
+
+            composable(
+                route = Routes.BOOK_DETAIL,
+                arguments = listOf(
+                    androidx.navigation.navArgument("bookId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                ),
+            ) { entry ->
+                BookDetailScreen(
+                    factory = factory,
+                    bookId = entry.arguments?.getString("bookId").orEmpty(),
+                    onBack = { navController.popBackStack() },
+                    onRead = { id -> navController.navigate(Routes.reader(id)) },
+                    onOpenToc = { id -> navController.navigate(Routes.reader(id)) },
+                    onOpenNotes = { id -> navController.navigate(Routes.bookNotes(id)) },
                 )
             }
 

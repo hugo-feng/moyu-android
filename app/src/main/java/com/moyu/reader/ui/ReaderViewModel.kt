@@ -305,17 +305,39 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         val measuredWidth = contentBoxWidth
             ?: (viewport.first - marginPx * 2).toInt()
 
-        val metrics = PaginationEngine.Metrics(
-            contentWidth = measuredWidth.coerceAtLeast(1),
-            contentHeight = measuredHeight.coerceAtLeast(1),
-            lineHeight = lineHeightPx.toInt().coerceAtLeast(1),
-            firstPageHeaderHeight = firstPageHeaderHeight,
-        )
-
         val paint = PaginationEngine.buildTextPaint(
             textSizePx = textSizePx,
             typeface = if (prefs.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT,
             letterSpacingEm = prefs.letterSpacingEm,
+        )
+
+        /**
+         * 行高用「引擎与渲染共同认可」的那个值，而不是直接拿
+         * `字号 × 行距倍率`。
+         *
+         * ## 为什么必须这样
+         *
+         * 设置里的行距是个倍率，用户把它调小时（例如 1.2），
+         * `字号 × 倍率` 可能**小于字体的自然行高**。而两侧排版都不可能
+         * 压到自然行高以下：
+         *   - `StaticLayout` 不支持负的额外行距；
+         *   - Compose 的 `TextStyle.lineHeight` 只是下限，字体度量更大时以度量为准。
+         *
+         * 于是引擎按「小的那个」算一页能放 10 行，渲染按「大的那个」画出来
+         * 远超容器 —— 分页的回退循环一路减行，最终**每页底部空出一大块**，
+         * 断点也跟着挪到句子中间。用户看到的就是
+         * 「明明最底部还有很多空间，句子却被从中间切开」。
+         *
+         * 取两者较大值后两侧口径一致。这是「能实测就不要推算」的又一处应用：
+         * 自然行高来自 TextPaint 的字体度量，是实测值。
+         */
+        val effectiveLineHeight = PaginationEngine.effectiveLineHeight(paint, lineHeightPx)
+
+        val metrics = PaginationEngine.Metrics(
+            contentWidth = measuredWidth.coerceAtLeast(1),
+            contentHeight = measuredHeight.coerceAtLeast(1),
+            lineHeight = effectiveLineHeight.toInt().coerceAtLeast(1),
+            firstPageHeaderHeight = firstPageHeaderHeight,
         )
 
         val pages = PaginationEngine.paginate(chapter.content, metrics, paint)

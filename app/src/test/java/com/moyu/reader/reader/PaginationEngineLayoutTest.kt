@@ -62,4 +62,72 @@ class PaginationEngineLayoutTest {
             assertEquals(p.index, PaginationEngine.pageIndexForOffset(pages, p.end - 1))
         }
     }
+
+    // ------------------------------------------------------------------
+    // 断行：句子不该被从中间切开
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `分页边界不会落在一句话的中间`() {
+        // 用户反馈「为什么书籍分页会把一句完整的句子从中间切开分到两页」。
+        //
+        // 直接原因：渲染侧（Compose 的 TextStyle）没有指定 lineBreak，
+        // 默认是 LineBreak.Simple，允许在任意字符间断行；
+        // 而分页引擎用的是 BREAK_STRATEGY_HIGH_QUALITY。
+        // 两边策略不同 → 分页算出的行尾与真正画出来的行尾不一致，
+        // 于是页面边界会切在句子中间。
+        //
+        // 这条测试守住的是「页面边界落在标点或段末」这个性质：
+        // 每一页的最后一个字符，要么是标点/换行，要么后面紧跟标点。
+        val content = buildString {
+            repeat(60) {
+                append("他握紧了剑柄，回头望了一眼那座已经看不见的城。雪还在下。\n")
+            }
+        }
+        val metrics = Metrics(contentWidth = 1080, contentHeight = 640, lineHeight = 60)
+        val pages = PaginationEngine.paginate(content, metrics, paint())
+        assumeTrue("StaticLayout produced no usable pages", pages.size > 1)
+
+        // 句末标点与段落结束都算「自然的断点」
+        val naturalBreaks = setOf('。', '！', '？', '；', '…', '\n', '」', '』', '，', '、')
+
+        val bad = pages.dropLast(1).filter { p ->
+            val lastChar = content[p.end - 1]
+            val nextChar = content.getOrNull(p.end)
+            lastChar !in naturalBreaks && nextChar !in naturalBreaks
+        }
+
+        assertTrue(
+            "以下页面的边界落在句子中间（既不是标点前也不是标点后）：" +
+                bad.joinToString("") { p ->
+                    "\n  page ${p.index}: …「" +
+                        content.substring((p.end - 8).coerceAtLeast(0), p.end) + "」|「" +
+                        content.substring(p.end, (p.end + 8).coerceAtMost(content.length)) + "」…"
+                },
+            bad.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `行尾不会出现句末标点跑到下一行开头`() {
+        // 中文排版的基本规则：句号、逗号这类标点不能出现在行首。
+        // 分页引擎用的是系统 StaticLayout，规则由系统保证；
+        // 这条测试的作用是：如果将来有人把 breakStrategy 改掉（比如换成 SIMPLE），
+        // 这里会立刻失败并指出问题。
+        val content = buildString {
+            repeat(40) { append("剑光一闪，雨停了，他的衣角还在滴水，却没有一丝声音。\n") }
+        }
+        val metrics = Metrics(contentWidth = 1080, contentHeight = 640, lineHeight = 60)
+        val pages = PaginationEngine.paginate(content, metrics, paint())
+        assumeTrue("StaticLayout produced no usable pages", pages.size > 1)
+
+        pages.dropLast(1).forEach { p ->
+            val next = content.getOrNull(p.end)
+            assertTrue(
+                "页 ${p.index} 的下一页以标点开头：「${next}」—— " +
+                    "说明断行策略没有把标点约束在行尾",
+                next == null || next !in setOf('。', '，', '！', '？', '、', '；'),
+            )
+        }
+    }
 }
