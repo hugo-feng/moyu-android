@@ -121,63 +121,37 @@ object MorphEngine {
         // —— 1. 子路径配对（满射：从多的一侧复制） ——
         val pairs = ArrayList<Pairing>()
         if (src.size == dst.size) {
-            // 数量相同：贪心最小代价配对（图标子路径数量很少，贪心足够且更快）
-            val usedDst = BooleanArray(dst.size)
-            for (s in src) {
-                var bestIndex = -1
-                var bestCost = Float.MAX_VALUE
-                for (j in dst.indices) {
-                    if (usedDst[j]) continue
-                    val cost = pairCost(s, dst[j])
-                    if (cost < bestCost) {
-                        bestCost = cost
-                        bestIndex = j
-                    }
-                }
-                if (bestIndex >= 0) {
-                    usedDst[bestIndex] = true
-                    pairs.add(Pairing(s, dst[bestIndex]))
-                }
+            /**
+             * 数量相同：求**最小代价置换**，与 morphicons 的 JS 版一致。
+             *
+             * 这里最初用贪心，结果形状明显不对：放大镜→关闭时，
+             * 贪心把「圆 → 斜线1、手柄 → 斜线2」配成对，中间帧扭成一个「才」字；
+             * 而正确的是「圆 → 斜线1、手柄 → 斜线2」这种全局最优配对。
+             * 图标子路径数很少（≤8），穷举置换的开销可以忽略。
+             */
+            val assignment = minCostAssignment(src, dst)
+            for (i in src.indices) {
+                val j = assignment[i]
+                if (j >= 0) pairs.add(Pairing(src[i], dst[j]))
             }
         } else {
-            val (many, few) = if (src.size > dst.size) src to dst else dst to src
+            /**
+             * 数量不等：从多的一侧向少的一侧做**满射**配对 ——
+             * 多出来的子路径**复制**最近的少侧子路径，而不是凭空出现或消失。
+             * 复制在静止时完全看不出来（同样的描边重叠在一起），
+             * 中途分开的过程读起来像「分裂」，比从无到有自然得多。
+             */
             val srcIsMany = src.size > dst.size
-            val assignment = IntArray(many.size) { -1 }
-            val usedFew = BooleanArray(few.size)
-            // 先给每个「少」的子路径找一个最合适的「多」
-            for (j in few.indices) {
-                var bestIndex = -1
-                var bestCost = Float.MAX_VALUE
-                for (i in many.indices) {
-                    if (assignment[i] >= 0) continue
-                    val cost = pairCost(many[i], few[j])
-                    if (cost < bestCost) {
-                        bestCost = cost
-                        bestIndex = i
-                    }
-                }
-                if (bestIndex >= 0) {
-                    assignment[bestIndex] = j
-                    usedFew[j] = true
-                }
-            }
-            // 剩下的「多」复制最近的「少」
+            val many = if (srcIsMany) src else dst
+            val few = if (srcIsMany) dst else src
+
+            // 每个「多」侧下标 → 配到的「少」侧下标
+            val assignManyToFew = minCostAssignmentUnequal(many, few)
             for (i in many.indices) {
-                val j = if (assignment[i] >= 0) {
-                    assignment[i]
-                } else {
-                    var bestJ = 0
-                    var bestCost = Float.MAX_VALUE
-                    for (k in few.indices) {
-                        val cost = pairCost(many[i], few[k])
-                        if (cost < bestCost) {
-                            bestCost = cost
-                            bestJ = k
-                        }
-                    }
-                    bestJ
-                }
-                if (srcIsMany) pairs.add(Pairing(many[i], few[j])) else pairs.add(Pairing(few[j], many[i]))
+                val j = assignManyToFew[i]
+                val a = many[i]
+                val b = few[j]
+                pairs.add(if (srcIsMany) Pairing(a, b) else Pairing(b, a))
             }
         }
 
@@ -209,6 +183,116 @@ object MorphEngine {
     private fun pairCost(a: Sampled, b: Sampled): Float {
         val d = hypot((a.centroidX - b.centroidX).toDouble(), (a.centroidY - b.centroidY).toDouble())
         return (d + 0.35f * abs(a.length - b.length)).toFloat()
+    }
+
+    /**
+     * 最小代价置换（等数量配对）。
+     *
+     * 子路径数很少（图标一般 1~9 条），因此**穷举所有置换**取总代价最小的一组。
+     * 超过 8 条时退化为贪心 —— 那已经是极端复杂的图标，
+     * 穷举的阶乘开销（9! = 36 万）不值得。
+     */
+    private fun minCostAssignment(a: List<Sampled>, b: List<Sampled>): IntArray {
+        val n = a.size
+        if (n == 0) return IntArray(0)
+        if (n > 8) return greedyAssignment(a, b)
+
+        val cost = Array(n) { i -> FloatArray(n) { j -> pairCost(a[i], b[j]) } }
+        val best = IntArray(n) { it }
+        var bestCost = Float.MAX_VALUE
+
+        // 堆算法生成全排列，避免递归分配
+        val perm = IntArray(n) { it }
+        val c = IntArray(n)
+        var i = 0
+        while (i < n) {
+            var total = 0f
+            for (k in 0 until n) total += cost[k][perm[k]]
+            if (total < bestCost) {
+                bestCost = total
+                perm.copyInto(best)
+            }
+            i = 0
+            while (i < n) {
+                if (c[i] < i) {
+                    val swap = if (i % 2 == 0) 0 else c[i]
+                    val t = perm[swap]; perm[swap] = perm[i]; perm[i] = t
+                    c[i]++
+                    break
+                } else {
+                    c[i] = 0
+                    i++
+                }
+            }
+            // 第一轮已经评估过初始排列
+            if (i == 0 && c.all { it == 0 }) break
+        }
+        return best
+    }
+
+    /**
+     * 数量不等时的**满射**配对：每个「多」侧子路径都配一个「少」侧子路径。
+     *
+     * 做法与 JS 版一致：先给每个「少」侧找一个最合适的「多」侧（保证每个都出现），
+     * 剩下的「多」侧各自复制最近的「少」侧。
+     */
+    private fun minCostAssignmentUnequal(many: List<Sampled>, few: List<Sampled>): IntArray {
+        val result = IntArray(many.size) { -1 }
+        if (few.isEmpty()) return result
+
+        // 第一步：每个「少」侧挑一个还没被占用的「多」侧
+        for (j in few.indices) {
+            var bestI = -1
+            var bestCost = Float.MAX_VALUE
+            for (i in many.indices) {
+                if (result[i] >= 0) continue
+                val c = pairCost(many[i], few[j])
+                if (c < bestCost) {
+                    bestCost = c
+                    bestI = i
+                }
+            }
+            if (bestI >= 0) result[bestI] = j
+        }
+
+        // 第二步：剩下的「多」侧复制最近的「少」侧
+        for (i in many.indices) {
+            if (result[i] >= 0) continue
+            var bestJ = 0
+            var bestCost = Float.MAX_VALUE
+            for (j in few.indices) {
+                val c = pairCost(many[i], few[j])
+                if (c < bestCost) {
+                    bestCost = c
+                    bestJ = j
+                }
+            }
+            result[i] = bestJ
+        }
+        return result
+    }
+
+    /** 贪心配对（仅在子路径数超过 8 时作为退路）。 */
+    private fun greedyAssignment(a: List<Sampled>, b: List<Sampled>): IntArray {
+        val used = BooleanArray(b.size)
+        val result = IntArray(a.size) { -1 }
+        for (i in a.indices) {
+            var bestJ = -1
+            var bestCost = Float.MAX_VALUE
+            for (j in b.indices) {
+                if (used[j]) continue
+                val c = pairCost(a[i], b[j])
+                if (c < bestCost) {
+                    bestCost = c
+                    bestJ = j
+                }
+            }
+            if (bestJ >= 0) {
+                used[bestJ] = true
+                result[i] = bestJ
+            }
+        }
+        return result
     }
 
     private class Alignment(

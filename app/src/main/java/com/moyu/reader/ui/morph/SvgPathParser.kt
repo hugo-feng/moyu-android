@@ -280,86 +280,25 @@ internal object SvgPathParser {
         }
         if (totalLength <= 0.01f) return null
 
-        // —— 找角点（切线夹角超过阈值处） ——
-        val cornerIndices = ArrayList<Int>()
-        val cornerThreshold = Math.toRadians(57.0)
-        val n = pts.size / 2
-        for (i in 1 until n - 1) {
-            val ax = pts[(i + 1) * 2] - pts[i * 2]
-            val ay = pts[(i + 1) * 2 + 1] - pts[i * 2 + 1]
-            val bx = pts[i * 2] - pts[(i - 1) * 2]
-            val by = pts[i * 2 + 1] - pts[(i - 1) * 2 + 1]
-            val na = hypot(ax.toDouble(), ay.toDouble())
-            val nb = hypot(bx.toDouble(), by.toDouble())
-            if (na < 1e-6 || nb < 1e-6) continue
-            val dot = ((ax * bx + ay * by) / (na * nb)).coerceIn(-1.0, 1.0)
-            val turn = acos(dot)
-            if (turn > cornerThreshold) cornerIndices.add(i)
-        }
-        if (!contour.closed) {
-            cornerIndices.add(0, 0)
-            cornerIndices.add(n - 1)
-        } else {
-            // 闭合路径只锚定真实角点，不锚定任意的起点
-            cornerIndices.sort()
-        }
-        if (cornerIndices.isEmpty()) cornerIndices.add(0)
-
+        /**
+         * 纯弧长等距采样。
+         *
+         * 这里**刻意不做角点锚定**。曾经实现过一版角点检测（切线夹角超过 57°
+         * 就把该点钉在固定下标上），结果中间帧严重变形：
+         * 月亮→太阳的 t=0.5 变成一团墨渍、放大镜→关闭变成个「才」字、
+         * 书签的对勾画到框外面。原因是「等槽位」把角点塞进固定下标会让点列
+         * 在角点附近被拉挤，而插值是按下标配对的，点列疏密不均就直接变成形状扭曲。
+         *
+         * 弧长等距采样没有这个问题，而且与 morphicons 的 JS 版做法一致 ——
+         * 两端结果对得上，才有「在验证器里看好了、手机上一样」这个前提。
+         */
         val out = FloatArray(SAMPLES * 2)
-
-        if (cornerIndices.size < 2) {
-            // 没有内部角点：整条路径按弧长均匀采样
-            for (i in 0 until SAMPLES) {
-                val target = totalLength * i / (SAMPLES - 1).toFloat()
-                val (x, y) = pointAtLength(pts, cumulative, target)
-                out[i * 2] = x; out[i * 2 + 1] = y
-            }
-            return MorphEngine.Sampled(out, contour.closed)
-        }
-
-        // 有角点：先把角点逐一放到位，剩下的名额按弧长分给各段
-        val cornerLengths = cornerIndices.map { cumulative[it] }
-        val result = arrayOfNulls<Pair<Float, Float>>(SAMPLES)
-        // 角点数量可能超过采样点数（极端情况），此时退化为均匀采样
-        if (cornerIndices.size >= SAMPLES) {
-            for (i in 0 until SAMPLES) {
-                val target = totalLength * i / (SAMPLES - 1).toFloat()
-                val (x, y) = pointAtLength(pts, cumulative, target)
-                out[i * 2] = x; out[i * 2 + 1] = y
-            }
-            return MorphEngine.Sampled(out, contour.closed)
-        }
-
-        for ((k, idx) in cornerIndices.withIndex()) {
-            val slot = (k * (SAMPLES - 1)) / (cornerIndices.size - 1)
-            result[slot] = pts[idx * 2] to pts[idx * 2 + 1]
-        }
-
-        // 在相邻角点之间按弧长补齐
-        for (k in 0 until cornerIndices.size - 1) {
-            val slotStart = (k * (SAMPLES - 1)) / (cornerIndices.size - 1)
-            val slotEnd = ((k + 1) * (SAMPLES - 1)) / (cornerIndices.size - 1)
-            val lenStart = cornerLengths[k]
-            val lenEnd = cornerLengths[k + 1]
-            val span = slotEnd - slotStart
-            if (span <= 1) continue
-            for (s in 1 until span) {
-                val frac = s / span.toFloat()
-                val target = lenStart + (lenEnd - lenStart) * frac
-                val (x, y) = pointAtLength(pts, cumulative, target)
-                result[slotStart + s] = x to y
-            }
-        }
-
         for (i in 0 until SAMPLES) {
-            val p = result[i] ?: run {
-                val target = totalLength * i / (SAMPLES - 1).toFloat()
-                pointAtLength(pts, cumulative, target)
-            }
-            out[i * 2] = p.first
-            out[i * 2 + 1] = p.second
+            val target = totalLength * i / (SAMPLES - 1).toFloat()
+            val (x, y) = pointAtLength(pts, cumulative, target)
+            out[i * 2] = x
+            out[i * 2 + 1] = y
         }
-
         return MorphEngine.Sampled(out, contour.closed)
     }
 
