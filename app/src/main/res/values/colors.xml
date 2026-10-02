@@ -25,6 +25,18 @@
     <color name="moyu_danger">#A5453A</color>
     <color name="moyu_success">#5C7A4A</color>
 
+    <!--
+      应用图标（自适应图标）的底色。
+
+      用**深青绿**而不是界面底色那样的浅纸色：图标要放在用户的主屏上，
+      与各种壁纸相邻，浅色底在小尺寸下会糊掉、也和壁纸糊在一起。
+      深底浅色图形是图标设计的常见做法（Yellow 就是黑底金书），
+      对比强、缩到 48px 仍能看清是一本书。
+
+      取值与书架封面用的青绿同一色系，视觉上仍属于本应用的配色。
+    -->
+    <color name="ic_launcher_background">#2E6B62</color>
+
     <!-- 深色（夜幕） -->
     <color name="moyu_night_bg">#16171A</color>
     <color name="moyu_night_surface">#1D1F23</color>

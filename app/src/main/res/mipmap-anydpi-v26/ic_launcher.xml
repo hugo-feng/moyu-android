@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自适应图标（Android 8+）：纸感底 + 翻开的书 + 一滴墨 -->
+<!-- 自适应图标（Android 8+）：深青底 + 书本 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/moyu_paper" />
+    <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+    <!--
+      单色层必须用专门画好的**纯剪影**，不能复用彩色前景。
+      主题图标（Android 13+ / 澎湃 OS）会忽略单色层里的颜色、把整个形状填成一色，
+      复用前景的结果是书脊与"文字"细线一起被填平，缩到主屏尺寸就只剩一个方块。
+    -->
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>

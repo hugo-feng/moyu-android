@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   单色层：主题图标（Android 13+ / 澎湃 OS）会忽略这里的颜色，
-  用系统取色重新填充整个形状，因此这一层必须是**纯剪影**。
-  书脊缺口特意加宽，否则两页会被填成一整块、看不出是书。
+  用系统取色重新填充整个形状，因此这一层必须是**纯剪影** ——
+  所有图形填成同一个实色，靠「有没有」而不是靠颜色区分。
+
+  书脊留缝是刻意的：不留缝的话左右两页会被填成一整块矩形，
+  缩到主屏尺寸就看不出是书了。
+  书页上的「文字」细线则**不能画** —— 它们在剪影里只会变成几道无意义的缺口。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -10,10 +14,18 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
+    <!-- 左页 -->
     <path
-        android:fillColor="#000000"
-        android:pathData="M50.5,34 C38.5,28 28,26 22,26 L22,74 C28,74 38.5,76 50.5,82 Z" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,30 L51,32 L51,76 L30,74 Z" />
+
+    <!-- 右页 -->
     <path
-        android:fillColor="#000000"
-        android:pathData="M57.5,34 C69.5,28 80,26 86,26 L86,74 C80,74 69.5,76 57.5,82 Z" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M57,32 L78,30 L78,74 L57,76 Z" />
+
+    <!-- 书页下缘的厚度：让剪影有「书」的轮廓而不是两块方片 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,74 L51,76 L57,76 L78,74 L78,78 L57,80 L51,80 L30,78 Z" />
 </vector>

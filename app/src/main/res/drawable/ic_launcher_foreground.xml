@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  应用图标前景：一本翻开的书 + 一滴墨。
-  自适应图标的前景层会被系统裁切，因此图形必须落在中心 66% 的安全区内
-  （108dp 画布 → 安全区约 72dp，即中心 18~90 之间）。
+  应用图标前景：一本书。
+
+  构图借鉴 Yellow 的图标思路 —— **纯几何、无渐变、底面与图形强对比**：
+  深青底 + 米色书 + 书脊留缝 + 几道"文字"细线。
+  这么做是为了**小尺寸下依然清楚**：用户在主屏看到的图标往往只有 48px，
+  渐变色块与细描边在这个尺寸下会糊成一团（上一版就是这个问题：
+  浅纸底 + 浅纸书页 + 棕色描边，整体发灰，缩小后看不清是什么）。
+
+  自适应图标的前景层会被系统裁切，图形必须落在中心 66% 的安全区内
+  （108dp 画布 → 安全区约 72dp，即中心 18~90）。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -10,31 +17,34 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 书脊 -->
+    <!-- 书脊：深色竖条，把左右两页分开 -->
     <path
-        android:strokeColor="#8A6A46"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:pathData="M54,34 L54,76" />
+        android:fillColor="#1E4A44"
+        android:pathData="M52,32 L56,32 L56,76 L52,76 Z" />
 
     <!-- 左页 -->
     <path
-        android:fillColor="#EFE6D6"
-        android:strokeColor="#8A6A46"
-        android:strokeWidth="3"
-        android:strokeLineJoin="round"
-        android:pathData="M54,36 C48,31.5 40.5,30 33,29.6 L33,72 C40.5,72.4 48,73.9 54,78.4 Z" />
+        android:fillColor="#EFE7D8"
+        android:pathData="M30,30 L52,32 L52,76 L30,74 Z" />
 
     <!-- 右页 -->
     <path
-        android:fillColor="#EFE6D6"
-        android:strokeColor="#8A6A46"
-        android:strokeWidth="3"
-        android:strokeLineJoin="round"
-        android:pathData="M54,36 C60,31.5 67.5,30 75,29.6 L75,72 C67.5,72.4 60,73.9 54,78.4 Z" />
+        android:fillColor="#F7F1E6"
+        android:pathData="M56,32 L78,30 L78,74 L56,76 Z" />
 
-    <!-- 墨点 -->
+    <!-- 右页上的"文字"细线：三条递减，像一段落 -->
     <path
-        android:fillColor="#33302B"
-        android:pathData="M54,52 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+        android:fillColor="#B9AE9A"
+        android:pathData="M61,41 L73,40.2 L73,42.4 L61,43.2 Z" />
+    <path
+        android:fillColor="#B9AE9A"
+        android:pathData="M61,47 L73,46.2 L73,48.4 L61,49.2 Z" />
+    <path
+        android:fillColor="#B9AE9A"
+        android:pathData="M61,53 L69,52.4 L69,54.6 L61,55.2 Z" />
+
+    <!-- 书页下缘的厚度：一条深色窄带，让书"有厚度"而不是两块色片 -->
+    <path
+        android:fillColor="#2E6B62"
+        android:pathData="M30,74 L52,76 L56,76 L78,74 L78,78 L56,80 L52,80 L30,78 Z" />
 </vector>

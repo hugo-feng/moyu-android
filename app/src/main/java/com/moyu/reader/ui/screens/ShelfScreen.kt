@@ -616,6 +616,17 @@ fun BookCover(
     Box(
         modifier = modifier
             .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            /**
+             * 必须显式 `fillMaxWidth()` 再 `aspectRatio`，不能只靠上面的分支。
+             *
+             * `aspectRatio` 要有**确定的宽度约束**才能算出高度。网格里传的是
+             * `width = null`（即 fillMaxWidth），看起来一样，但如果外层是
+             * `weight(1f)` 这类由父级先分配、再测量子级的容器，
+             * 宽度约束在测量时可能还是「未定」，`aspectRatio` 便算出异常高度 ——
+             * 实测表现是封面被撑成很高的色块，**书名与格式角标被挤出可视区**，
+             * 用户看到的就是「一个纯色矩形，什么字都没有」。
+             */
+            .fillMaxWidth()
             .aspectRatio(3f / 4.3f)
             .clip(shape)
             .background(coverGradient(book.title)),
