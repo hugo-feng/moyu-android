@@ -388,6 +388,17 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     }
 
     /**
+     * 版心的实测高度（像素），供滚动模式的自动阅读取速。
+     *
+     * 滚动模式没有「页」，但「秒/页」这个设置对速度的预期与分页模式是同一个：
+     * 每秒应当流过与翻一页相同的文字量。因此它必须用**同一个**版心高度，
+     * 而不是自己按可视区高度另算一份 —— 那样两个模式设成同样的秒数会速度不同。
+     *
+     * 尚未测量到时返回 0，调用方自行回退。
+     */
+    fun lastContentBoxHeight(): Int = contentBoxHeight ?: 0
+
+    /**
      * 上报系统栏高度。
      *
      * 值没变就直接返回：Composable 每次重组都会上报，

@@ -271,6 +271,10 @@ fun ReaderScreen(
                     content = chapterContent,
                     highlights = highlights,
                     settings = settings,
+                    viewModel = viewModel,
+                    autoReading = autoReading,
+                    // 滚到本章末尾时自动进入下一章，这样自动阅读能一直读下去
+                    onReachEnd = { viewModel.flip(1, density) },
                 )
             } else if (currentPage != null) {
                 PagedReader(
@@ -354,6 +358,49 @@ fun ReaderScreen(
                     },
             )
         }
+
+        /**
+         * 点击手势：**两种模式都需要**。
+         *
+         * 早先这里跟着翻页手势一起被 `if (pageMode != SCROLL)` 关掉了 ——
+         * 当时是为了修「滚动模式下点屏幕两侧会静默跳到下一章」，
+         * 但连带把「点中间呼出工具栏」也砍了。滚动模式因此进不去
+         * 目录 / 笔记 / 排版，用户报的现象正是「控制栏收不起来、点中间没反应」。
+         *
+         * 正确的分法：左右热区的**翻页**只在分页模式生效，
+         * 而中间热区的**呼出工具栏**两种模式都要有。
+         * 滚动模式下不存在「翻页」这个概念（进度由滚动位置决定），
+         * 若也响应左右点击就会静默跨章、进度与实际脱节。
+         */
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(settings.pageMode) {
+                    detectTapGestures(
+                        onTap = { offset ->
+                            val width = size.width
+                            val third = width / 3f
+                            val middleOnly = settings.pageMode == PageMode.SCROLL
+                            when {
+                                // 滚动模式：任意位置都当作「中间」——只切换工具栏
+                                middleOnly || (offset.x >= third && offset.x <= third * 2) -> {
+                                    chromeVisible = !chromeVisible
+                                    if (!chromeVisible) sheet = ReaderSheet.NONE
+                                }
+
+                                offset.x < third -> {
+                                    if (!chromeVisible) viewModel.flip(-1, density)
+                                }
+
+                                else -> {
+                                    if (!chromeVisible) viewModel.flip(1, density)
+                                }
+                            }
+                        },
+                        onLongPress = { },
+                    )
+                },
+        )
 
         // —— 顶部栏 ——
         if (chromeVisible) {
@@ -1150,17 +1197,100 @@ private fun ScrollReader(
     content: String,
     highlights: List<IntRange>,
     settings: com.moyu.reader.data.prefs.ReaderSettings,
+    /** 取版心实测高度用 —— 自动滚动的速度必须与分页模式同口径。 */
+    viewModel: ReaderViewModel,
+    /** 自动阅读是否开启。开启时按「秒/页」匀速向下滚动。 */
+    autoReading: Boolean = false,
+    /** 滚到本章末尾时回调，交给调用方决定是否进入下一章。 */
+    onReachEnd: () -> Unit = {},
 ) {
     val palette = moyuPalette()
     val scrollState = rememberScrollState()
     val safeTop = com.moyu.reader.ui.safeTop
     val safeBottom = com.moyu.reader.ui.safeBottom
 
-    Box(
+    // 滚动容器的可视高度。自动阅读每次推进「一屏」，因此需要它。
+    // 用 BoxWithConstraints 而不是 onSizeChanged：后者要么多一个 state、
+    // 要么在首帧拿不到值，而自动阅读恰恰在开启的第一秒就要用。
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = settings.marginDp.dp),
     ) {
+        /**
+         * 自动滚动的速度基准：**一屏文字的高度**，而不是整个可视区高度。
+         *
+         * ## 为什么必须与分页模式口径一致
+         *
+         * 「秒/页」这个设置的含义是「读完一页需要多少秒」。
+         * 分页模式下「一页」= 版心能容纳的文字高度；滚动模式并没有「页」，
+         * 但用户对速度的预期是同一个 —— 同样设 9 秒，
+         * 滚动模式每秒应当流过**与翻一页相同的文字量**。
+         *
+         * 第一版这里用的是整个可视高度（`maxHeight - 安全区`），
+         * 而可视区还包含天头、地脚与安全区留白，比版心高出一截 ——
+         * 于是滚动模式实际读得更快，两个模式的「9 秒」速度对不上。
+         *
+         * 版心高度由分页引擎实测上报（与分页模式共用同一个值），
+         * 已扣掉页边距、系统栏与地脚，因此两边口径天然一致。
+         */
+        val pageTextHeightPx = viewModel.lastContentBoxHeight().takeIf { it > 0 }
+            ?: with(androidx.compose.ui.platform.LocalDensity.current) {
+                (maxHeight - safeTop - safeBottom).toPx().toInt()
+            }
+
+        /**
+         * 自动阅读：**匀速连续滚动**，像提词器一样。
+         *
+         * ## 为什么不是「每秒推一屏」
+         *
+         * 第一版写的是 `delay(秒数) → animateScrollTo(当前位置 + 一屏)`。
+         * 那是「跳」而不是「滚」：每过 N 秒画面突然滑一整屏，
+         * 眼睛要重新定位，读起来很累 —— 用户的反馈正是这一点。
+         *
+         * 正确做法是把「一屏」拆到整个时间段里：每帧推进
+         * `一屏 / (秒数 × 帧率)`。这样文字是**持续缓慢流过**的，
+         * 视线可以一直跟着走，这才是滚动模式该有的自动阅读。
+         *
+         * 用 `withFrameNanos` 而不是固定 delay：帧率由系统决定（60/90/120Hz），
+         * 按固定毫秒推进会让高刷屏上速度快一倍。
+         */
+        LaunchedEffect(autoReading, settings.autoReadSecondsPerPage, pageTextHeightPx) {
+            if (!autoReading || pageTextHeightPx <= 0) return@LaunchedEffect
+
+            val seconds = settings.autoReadSecondsPerPage.coerceIn(2, 120).toFloat()
+            // 每秒滚过的像素 = 一屏文字高度 / 秒数。
+            // 与分页模式「每 N 秒翻一页」的读速严格等价。
+            val pxPerSecond = pageTextHeightPx / seconds
+            // 用累加的小数位置避免整数截断导致「高刷屏几乎不动」
+            var carried = 0f
+            var lastNanos = 0L
+
+            while (true) {
+                androidx.compose.runtime.withFrameNanos { now ->
+                    if (lastNanos != 0L) {
+                        val dt = (now - lastNanos) / 1_000_000_000f
+                        // 单帧最多推进 0.1 秒的量：从后台切回来时 dt 可能是几秒，
+                        // 不限制的话会瞬间跳过大段文字
+                        carried += pxPerSecond * dt.coerceAtMost(0.1f)
+                    }
+                    lastNanos = now
+                }
+                if (carried >= 1f) {
+                    val step = carried.toInt()
+                    carried -= step
+                    val next = (scrollState.value + step).coerceAtMost(scrollState.maxValue)
+                    scrollState.scrollTo(next)
+                }
+                // 到达本章末尾：交给调用方决定是否进入下一章，本次自动阅读到此为止
+                if (scrollState.value >= scrollState.maxValue && scrollState.maxValue > 0) {
+                    kotlinx.coroutines.delay(600)
+                    onReachEnd()
+                    break
+                }
+            }
+        }
+
         SelectionContainer {
             Column(
                 modifier = Modifier
