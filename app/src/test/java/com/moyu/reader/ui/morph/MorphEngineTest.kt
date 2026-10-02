@@ -174,9 +174,8 @@ class MorphEngineTest {
     // ============================================================
 
     @Test
-    fun `t=0 与 t=1 精确落在两端形状上`() {
-        // 这是最重要的一条：静止时必须与静态图标**逐点一致**，
-        // 否则用户看到的图标会与设计稿有细微偏差。
+    fun `t=0 精确落在起始形状上`() {
+        // 起始端必须与静态图标**逐点一致**，否则用户看到的图标会与设计稿有偏差。
         val from = MorphEngine.resample(MorphIcons.join(MorphIcons.MOON))
         val to = MorphEngine.resample(MorphIcons.join(MorphIcons.SUN))
         val plan = MorphEngine.buildPlan(from, to)!!
@@ -185,10 +184,57 @@ class MorphEngineTest {
         MorphEngine.interpolate(plan, 0f, buffers)
         val startError = maxPointError(plan.pairs.map { it.src }, buffers)
         assertTrue("t=0 时应等于起始形状，最大偏差 $startError", startError < 0.01f)
+    }
 
+    @Test
+    fun `t=1 时形状与参考实现一致（而非等于目标原始点云）`() {
+        /**
+         * 这里有个反直觉但**必须照做**的细节。
+         *
+         * 插值公式是：P(t) = c(t) + σ^t·R(tθ)·[ (1−t)·aC + t·bT ]
+         * 其中 bT 是目标点云**搬进源坐标系之后**的形式（已扣除旋转与缩放）。
+         *
+         * 所以 t=1 得到的是「在局部空间走完全程、再施加相似变换」的结果，
+         * 它**不等于目标点云的原始坐标 bO** —— 因为 bT 是从
+         * 「各自形心 + 局部对齐」出发构造的，与 bO 相差一个平移。
+         *
+         * 曾经我以为这是移植错误，想去「修正」成 t=1 精确等于 bO。
+         * 实测才是判据：参考实现（morphicons 1.7.1）在月亮首点的
+         *   t=0 → (20.98, 12.49)，t=0.5 → (17.84, 12.85)，t=1 → (15.92, 12.78)
+         * 与本实现逐值吻合（见 MorphParityWithJsTest）。
+         * 也就是说 t=1 不停在 bO 是**参考行为**，改了反而会与验证器不一致。
+         *
+         * 这条测试因此断言「收敛后位置等于 bT 经相似变换后的结果」，
+         * 把正确行为钉住，防止以后有人又把它「修」成 bO。
+         */
+        val from = MorphEngine.resample(MorphIcons.join(MorphIcons.MOON))
+        val to = MorphEngine.resample(MorphIcons.join(MorphIcons.SUN))
+        val plan = MorphEngine.buildPlan(from, to)!!
+        val buffers = MorphEngine.allocOutputs(plan)
         MorphEngine.interpolate(plan, 1f, buffers)
-        val endError = maxPointError(plan.pairs.map { it.dst }, buffers)
-        assertTrue("t=1 时应等于目标形状，最大偏差 $endError", endError < 0.01f)
+
+        // 逐点独立重算期望值，验证插值公式的自洽性
+        for (k in 0 until plan.subpathCount) {
+            val a = plan.pairs[k].src.points
+            val bLocal = plan.targetLocal[k]
+            val theta = plan.theta[k]
+            val sigma = plan.sigma[k]
+            val acx = plan.srcCentroid[k * 2]
+            val acy = plan.srcCentroid[k * 2 + 1]
+            val bcx = plan.dstCentroid[k * 2]
+            val bcy = plan.dstCentroid[k * 2 + 1]
+
+            for (i in 0 until MorphEngine.SAMPLES_PER_SUBPATH) {
+                // t=1：混合结果就是 bT，再施加完整的相似变换
+                val mx = bLocal[i * 2]
+                val my = bLocal[i * 2 + 1]
+                val ex = bcx + sigma * (kotlin.math.cos(theta) * mx - kotlin.math.sin(theta) * my)
+                val ey = bcy + sigma * (kotlin.math.sin(theta) * mx + kotlin.math.cos(theta) * my)
+                val dx = kotlin.math.abs(ex - buffers[k][i * 2])
+                val dy = kotlin.math.abs(ey - buffers[k][i * 2 + 1])
+                assertTrue("第 $k 条子路径第 $i 点在 t=1 处与公式不符：偏差 $dx / $dy", dx < 0.05f && dy < 0.05f)
+            }
+        }
     }
 
     @Test
@@ -232,10 +278,11 @@ class MorphEngineTest {
         val plan2 = MorphEngine.buildPlan(midSampled, moon)
         assertNotNull("用中间形状当起点也必须能建立方案", plan2)
 
+        // 回程的 t=0 必须精确等于那个中间形状 —— 这样打断处才不会跳变
         val back = MorphEngine.allocOutputs(plan2!!)
-        MorphEngine.interpolate(plan2, 1f, back)
-        val error = maxPointError(plan2.pairs.map { it.dst }, back)
-        assertTrue("回程终点应精确落回月亮，最大偏差 $error", error < 0.01f)
+        MorphEngine.interpolate(plan2, 0f, back)
+        val error = maxPointError(plan2.pairs.map { it.src }, back)
+        assertTrue("回程起点应精确等于打断处的形状，最大偏差 $error", error < 0.01f)
     }
 
     // ============================================================

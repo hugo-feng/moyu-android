@@ -68,7 +68,6 @@ import com.moyu.reader.ui.components.MoyuChip
 import com.moyu.reader.ui.components.MoyuPrimaryButton
 import com.moyu.reader.ui.components.MoyuTextButton
 import com.moyu.reader.ui.components.SegmentedControl
-import com.moyu.reader.ui.morph.MorphIcons
 import com.moyu.reader.ui.safeDrawingBottomPadding
 import com.moyu.reader.ui.safeDrawingTopPadding
 import com.moyu.reader.ui.theme.fontDisplayName
@@ -199,62 +198,19 @@ fun ReaderBottomBar(
         ) {
             ReaderToolButton("目录", Icons.AutoMirrored.Filled.List, onToc)
             ReaderToolButton("笔记", Icons.Filled.Edit, onNotes)
-            // 夜间 ↔ 日间：用图标形变（月亮与太阳形状接近，中间帧是干净的开合）
-            MorphToolButton(
-                label = if (isNight) "日间" else "夜间",
-                paths = if (isNight) MorphIcons.SUN else MorphIcons.MOON,
-                onClick = onToggleNight,
+            ReaderToolButton(
+                if (isNight) "日间" else "夜间",
+                if (isNight) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                onToggleNight,
             )
             ReaderToolButton(
                 if (autoReading) "暂停" else "自动",
                 if (autoReading) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 onToggleAuto,
             )
-            // 搜索：同样用形变（放大镜收拢成叉，两条简笔的配对很自然）
-            MorphToolButton(
-                label = "搜索",
-                paths = MorphIcons.SEARCH,
-                onClick = onSearch,
-            )
+            ReaderToolButton("搜索", Icons.Filled.Search, onSearch)
             ReaderToolButton("排版", Icons.Filled.FormatSize, onTypography)
         }
-    }
-}
-
-/**
- * 会形变的工具栏按钮。
- *
- * 只有形状足够接近的图标对才值得用形变 —— 差异大的配对中间帧会乱成一团，
- * 而工具栏是高频点击处，难看的过渡比没有动效更糟。
- * 这里只用两处：夜间↔日间、搜索（见 MorphIcons 的注释）。
- */
-@Composable
-private fun MorphToolButton(
-    label: String,
-    paths: List<String>,
-    onClick: () -> Unit,
-) {
-    val palette = moyuPalette()
-    Column(
-        modifier = Modifier
-            .width(56.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        com.moyu.reader.ui.morph.MorphIcon(
-            paths = paths,
-            contentDescription = label,
-            tint = palette.textSecondary,
-            size = 21.dp,
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.textSecondary,
-            modifier = Modifier.padding(top = 3.dp),
-        )
     }
 }
 

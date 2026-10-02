@@ -44,6 +44,23 @@ object MorphEngine {
      */
     const val SAMPLES_PER_SUBPATH = 64
 
+    /** 子路径配对的弧长权重（参考实现 LEN_WEIGHT）。 */
+    private const val LEN_WEIGHT = 0.35f
+
+    /** 对齐打分里旋转项的权重（参考实现 LAMBDA）。 */
+    private const val LAMBDA = 0.05f
+
+    /**
+     * 全局对齐的采纳门槛（参考实现 GLOBAL_EPS）。
+     *
+     * 全局残差超过它就说明两个图标的整体姿态本就不同，
+     * 强行把所有子路径一起转会扭曲形状 —— 此时宁可各转各的。
+     */
+    private const val GLOBAL_EPS = 0.005f
+
+    /** 子路径数超过这个值就不做全排列（参考实现 PERM_MAX）。 */
+    private const val PERM_MAX = 8
+
     /** 一个重采样后的子路径：等距点列 + 是否闭合。 */
     class Sampled(val points: FloatArray, val closed: Boolean) {
         /** 形心，用于子路径配对与极坐标插值。 */
@@ -111,6 +128,8 @@ object MorphEngine {
         val srcCentroid: FloatArray,
         val dstCentroid: FloatArray,
         val closedFlags: BooleanArray,
+        /** 目标点云在「源坐标系」里的形式（已扣除旋转与缩放），插值时用它做混合 */
+        val targetLocal: List<FloatArray>,
     ) {
         val subpathCount: Int get() = pairs.size
     }
@@ -157,27 +176,147 @@ object MorphEngine {
 
         if (pairs.isEmpty()) return null
 
-        // —— 2 + 3. 每个配对求朝向、起点与相似变换 ——
-        val theta = FloatArray(pairs.size)
-        val sigma = FloatArray(pairs.size)
-        val srcCentroid = FloatArray(pairs.size * 2)
-        val dstCentroid = FloatArray(pairs.size * 2)
-        val closedFlags = BooleanArray(pairs.size)
+        // —— 2 + 3. 每个配对求朝向、起点与局部相似变换 ——
+        val count = pairs.size
+        val theta = FloatArray(count)
+        val sigma = FloatArray(count)
+        val srcCentroid = FloatArray(count * 2)
+        val dstCentroid = FloatArray(count * 2)
+        val closedFlags = BooleanArray(count)
+        // 目标点云搬进「源坐标系」后的形式（参考实现里的 bT）
+        val targetLocal = ArrayList<FloatArray>(count)
+        // 权重：残差累加时要用
+        val residuals = FloatArray(count)
 
-        for (k in pairs.indices) {
+        for (k in 0 until count) {
             val a = pairs[k].src
             val b = pairs[k].dst
             closedFlags[k] = a.closed && b.closed
-            val aligned = bestAlignment(a, b)
-            theta[k] = aligned.theta
-            sigma[k] = aligned.sigma
-            srcCentroid[k * 2] = aligned.srcCx
-            srcCentroid[k * 2 + 1] = aligned.srcCy
-            dstCentroid[k * 2] = aligned.dstCx
-            dstCentroid[k * 2 + 1] = aligned.dstCy
+            val al = bestAlignment(a, b, closedFlags[k])
+            theta[k] = al.theta
+            sigma[k] = al.sigma
+            srcCentroid[k * 2] = al.srcCx
+            srcCentroid[k * 2 + 1] = al.srcCy
+            dstCentroid[k * 2] = al.dstCx
+            dstCentroid[k * 2 + 1] = al.dstCy
+            residuals[k] = al.residual
+            targetLocal.add(al.bLocal.copyOf())
         }
 
-        return Plan(pairs, theta, sigma, srcCentroid, dstCentroid, closedFlags)
+        /**
+         * 4. **全局对齐**（参考实现的 applyGlobal）。
+         *
+         * 这是「中间帧不纠缠」的关键一步，也是最初漏掉的一步：
+         * 如果每条子路径都各转各的，那么月亮变成太阳时，
+         * 9 条光芒会各自绕自己的形心旋转、互不相干地漂移，
+         * 中间帧就成了一团墨渍。
+         *
+         * 做法是把**所有子路径的点拼成一个大点云**求一次全局相似变换
+         * （质心按点数加权，因此长笔画权重更大），
+         * 只有这次全局对齐足够好（残差 < GLOBAL_EPS）才采纳 ——
+         * 否则说明两个图标的整体姿态本来就不同，强行一起转会扭曲形状。
+         */
+        if (count > 1) {
+            val total = count * SAMPLES_PER_SUBPATH
+            val ga = FloatArray(total * 2)
+            val gb = FloatArray(total * 2)
+            for (k in 0 until count) {
+                pairs[k].src.points.copyInto(ga, k * SAMPLES_PER_SUBPATH * 2)
+                // bO：目标的原始点云
+                pairs[k].dst.points.copyInto(gb, k * SAMPLES_PER_SUBPATH * 2)
+            }
+            val gca = centroidOf(ga)
+            val gcb = centroidOf(gb)
+            val g = procrustesOf(ga, gb, gca, gcb)
+            if (g.residual < GLOBAL_EPS) {
+                val cosNeg = cos(-g.theta)
+                val sinNeg = sin(-g.theta)
+                for (k in 0 until count) {
+                    val bLocal = targetLocal[k]
+                    val bcx = dstCentroid[k * 2]
+                    val bcy = dstCentroid[k * 2 + 1]
+                    for (i in 0 until SAMPLES_PER_SUBPATH) {
+                        val bx = pairs[k].dst.points[i * 2] - bcx
+                        val by = pairs[k].dst.points[i * 2 + 1] - bcy
+                        bLocal[i * 2] = (bx * cosNeg - by * sinNeg) / g.sigma
+                        bLocal[i * 2 + 1] = (bx * sinNeg + by * cosNeg) / g.sigma
+                    }
+                    // 把全局旋转叠加到这一条的局部旋转上
+                    theta[k] += g.theta
+                }
+            }
+        }
+
+        return Plan(
+            pairs = pairs,
+            theta = theta,
+            sigma = sigma,
+            srcCentroid = srcCentroid,
+            dstCentroid = dstCentroid,
+            closedFlags = closedFlags,
+            targetLocal = targetLocal,
+        )
+    }
+
+    /** 点云质心（点数加权）。 */
+    private fun centroidOf(pts: FloatArray): FloatArray {
+        var sx = 0f
+        var sy = 0f
+        val n = pts.size / 2
+        for (i in 0 until n) {
+            sx += pts[i * 2]
+            sy += pts[i * 2 + 1]
+        }
+        return floatArrayOf(if (n == 0) 0f else sx / n, if (n == 0) 0f else sy / n)
+    }
+
+    /** 点云的「能量」Σ|p−c|²，用于残差归一化。 */
+    private fun energyOf(pts: FloatArray, cx: Float, cy: Float): Float {
+        var e = 0f
+        val n = pts.size / 2
+        for (i in 0 until n) {
+            val dx = pts[i * 2] - cx
+            val dy = pts[i * 2 + 1] - cy
+            e += dx * dx + dy * dy
+        }
+        return e
+    }
+
+    /**
+     * 2D Procrustes：求使 Σ|σ·R(θ)·(a−cA) − (b−cB)|² 最小的 (θ, σ)。
+     *
+     * 有闭式解，不需要 SVD：
+     *   θ* = atan2(Sxy − Syx, Sxx + Syy)，σ* = [cosθ(Sxx+Syy) + sinθ(Sxy−Syx)] / Σ|a−cA|²
+     * 残差用闭式 σ²·na − 2σ·num + nb，比先算每点误差再求和更省也更稳。
+     * 与参考实现逐项一致。
+     */
+    private fun procrustesOf(a: FloatArray, b: FloatArray, ca: FloatArray, cb: FloatArray): Alignment {
+        val n = a.size / 2
+        var sxx = 0f
+        var sxy = 0f
+        var syx = 0f
+        var syy = 0f
+        var na = 0f
+        var nb = 0f
+        for (i in 0 until n) {
+            val ax = a[i * 2] - ca[0]
+            val ay = a[i * 2 + 1] - ca[1]
+            val bx = b[i * 2] - cb[0]
+            val by = b[i * 2 + 1] - cb[1]
+            sxx += ax * bx
+            syy += ay * by
+            sxy += ax * by
+            syx += ay * bx
+            na += ax * ax + ay * ay
+            nb += bx * bx + by * by
+        }
+        val theta = atan2(sxy - syx, sxx + syy)
+        val num = cos(theta) * (sxx + syy) + sin(theta) * (sxy - syx)
+        var sigma = if (na > 1e-12f) num / na else 1f
+        if (!(sigma > 1e-6f)) sigma = 1e-6f
+        val res2 = (sigma * sigma * na - 2f * sigma * num + nb).coerceAtLeast(0f)
+        val residual = if (nb > 1e-12f) sqrt(res2 / nb) else 0f
+        return Alignment(theta, sigma, ca[0], ca[1], cb[0], cb[1], residual)
     }
 
     private fun pairCost(a: Sampled, b: Sampled): Float {
@@ -304,95 +443,99 @@ object MorphEngine {
         val dstCy: Float,
         /** 对齐后的归一化 RMS 残差：≈0 表示两个形状只差一个旋转/缩放。 */
         val residual: Float = 0f,
+        /** 目标点云搬进源坐标系后的形式（参考实现的 bT）。只在 bestAlignment 里回填。 */
+        var bLocal: FloatArray = FloatArray(0),
     )
-
     /**
-     * 求把 a 对齐到 b 的最优相似变换（2D Procrustes，有闭式解，不需要 SVD）。
+     * 求把 a 对齐到 b 的最优相似变换。
      *
-     * 闭合子路径额外尝试「起点旋转」：同一个圆环从哪个点开始采样是任意的，
-     * 不试的话两条同形状的闭合路径会被算成「需要旋转很多」。
+     * 自由度与参考实现一致：**两种遍历方向**，以及闭合回路的**起点自由度**。
+     *
+     * 两个容易写错的地方：
+     *
+     * 1. **反向遍历要「物理反转」点云**，而不是在算 S 矩阵时改用 b[n−1−i]。
+     *    混用两套下标会让 bT 的构造与 S 矩阵的配对不一致，形状直接错位。
+     *    这里统一成：先把要变的那一侧换成 `reversePts` 的结果，再照常按下标配对。
+     *
+     * 2. **起点自由度只施加在一侧**（闭合的那一侧；两侧都闭合时选 b）。
+     *    两侧同时转是冗余的，而且会让搜索空间大 64 倍却没有额外收益。
+     *
+     * 打分：`res + λ·|θ|/π`，λ = 0.05 —— 在残差相近时偏爱旋转更小的方案，
+     * 避免形状明明对齐得很好却绕一大圈。
      */
-    private fun bestAlignment(a: Sampled, b: Sampled): Alignment {
-        var best: Alignment? = null
+    private fun bestAlignment(a: Sampled, b: Sampled, bothClosed: Boolean): Alignment {
+        val aPts = a.points
+        val bPts = b.points
+        val ca = floatArrayOf(a.centroidX, a.centroidY)
+        val cb = floatArrayOf(b.centroidX, b.centroidY)
+
+        val varyA = a.closed && !b.closed
+        val base = if (varyA) aPts else bPts
+        val offsets = if (a.closed || b.closed) SAMPLES_PER_SUBPATH else 1
+
         var bestScore = Float.MAX_VALUE
+        var chosen: Alignment? = null
+        // 选中的那一侧点云（可能是反转/循环移位过的 b），构造 bLocal 时要用它，
+        // 否则会与 S 矩阵的配对错位。
+        var selectedB = bPts
 
-        // 朝向：正向 / 反向；闭合路径再加 N 个起点偏移
-        val offsets = if (a.closed && b.closed) {
-            // 全量 N×2 太慢，取 8 个均匀候选已能覆盖绝大多数情况
-            IntArray(8) { it * SAMPLES_PER_SUBPATH / 8 }
-        } else {
-            IntArray(1) { 0 }
-        }
-
-        for (reversed in booleanArrayOf(false, true)) {
-            for (offset in offsets) {
-                val aligned = procrustes(a, b, reversed, offset)
-                // 与 JS 版一致的打分：残差优先，其次偏爱更小的旋转角
-                val score = aligned.residual + 0.05f * (abs(aligned.theta) / Math.PI.toFloat())
+        for (dir in 0..1) {
+            val walk = if (dir == 1) reversePts(base) else base
+            for (off in 0 until offsets) {
+                val cand = if (off != 0) rotatePts(walk, off) else walk
+                val s = if (varyA) {
+                    procrustesOf(cand, bPts, ca, cb)
+                } else {
+                    procrustesOf(aPts, cand, ca, cb)
+                }
+                val score = s.residual + LAMBDA * (abs(s.theta) / Math.PI.toFloat())
                 if (score < bestScore) {
                     bestScore = score
-                    best = aligned
+                    chosen = s
+                    selectedB = if (varyA) bPts else cand
                 }
             }
         }
-        return best!!
+
+        val al = chosen!!
+        // 把目标点云搬进「源坐标系」：平移到形心、反向旋转、再除以缩放。
+        val n = SAMPLES_PER_SUBPATH
+        val bLocal = FloatArray(n * 2)
+        val cosNeg = cos(-al.theta)
+        val sinNeg = sin(-al.theta)
+        val bcx = al.dstCx
+        val bcy = al.dstCy
+        for (i in 0 until n) {
+            val bx = selectedB[i * 2] - bcx
+            val by = selectedB[i * 2 + 1] - bcy
+            bLocal[i * 2] = (bx * cosNeg - by * sinNeg) / al.sigma
+            bLocal[i * 2 + 1] = (bx * sinNeg + by * cosNeg) / al.sigma
+        }
+        return Alignment(
+            al.theta, al.sigma, al.srcCx, al.srcCy, al.dstCx, al.dstCy, al.residual, bLocal,
+        )
+    }
+    /** 反转点云的遍历方向。 */
+    private fun reversePts(p: FloatArray): FloatArray {
+        val n = p.size / 2
+        val out = FloatArray(p.size)
+        for (i in 0 until n) {
+            out[i * 2] = p[(n - 1 - i) * 2]
+            out[i * 2 + 1] = p[(n - 1 - i) * 2 + 1]
+        }
+        return out
     }
 
-    private fun procrustes(a: Sampled, b: Sampled, reversed: Boolean, offset: Int): Alignment {
-        val n = SAMPLES_PER_SUBPATH
-        var ax = 0f
-        var ay = 0f
-        var bx = 0f
-        var by = 0f
+    /** 循环移位：闭合回路没有「起点」，这是它的自由度。 */
+    private fun rotatePts(p: FloatArray, off: Int): FloatArray {
+        val n = p.size / 2
+        val out = FloatArray(p.size)
         for (i in 0 until n) {
-            ax += a.points[i * 2]
-            ay += a.points[i * 2 + 1]
-            bx += b.points[i * 2]
-            by += b.points[i * 2 + 1]
+            val j = (i + off) % n
+            out[i * 2] = p[j * 2]
+            out[i * 2 + 1] = p[j * 2 + 1]
         }
-        ax /= n; ay /= n; bx /= n; by /= n
-
-        var sxx = 0f
-        var sxy = 0f
-        var syx = 0f
-        var syy = 0f
-        var normA = 0f
-        for (i in 0 until n) {
-            val j = if (reversed) (n - 1 - ((i + offset) % n)) else ((i + offset) % n)
-            val px = a.points[i * 2] - ax
-            val py = a.points[i * 2 + 1] - ay
-            val qx = b.points[j * 2] - bx
-            val qy = b.points[j * 2 + 1] - by
-            sxx += px * qx
-            sxy += px * qy
-            syx += py * qx
-            syy += py * qy
-            normA += px * px + py * py
-        }
-        if (normA <= 1e-6f) return Alignment(0f, 1f, ax, ay, bx, by)
-
-        // 闭式解：θ* = atan2(Sxy − Syx, Sxx + Syy)
-        val theta = atan2(sxy - syx, sxx + syy)
-        val denom = cos(theta) * (sxx + syy) + sin(theta) * (sxy - syx)
-        val sigma = (denom / normA).coerceIn(0.2f, 5f)
-
-        // 残差：归一化的 RMS（与 JS 版同口径）
-        var residual = 0f
-        var normB = 0f
-        for (i in 0 until n) {
-            val j = if (reversed) (n - 1 - ((i + offset) % n)) else ((i + offset) % n)
-            val px = a.points[i * 2] - ax
-            val py = a.points[i * 2 + 1] - ay
-            val qx = b.points[j * 2] - bx
-            val qy = b.points[j * 2 + 1] - by
-            val rx = sigma * (cos(theta) * px - sin(theta) * py) - qx
-            val ry = sigma * (sin(theta) * px + cos(theta) * py) - qy
-            residual += rx * rx + ry * ry
-            normB += qx * qx + qy * qy
-        }
-        val normalizedResidual = if (normB <= 1e-6f) 0f else sqrt(residual / normB)
-
-        return Alignment(theta, sigma, ax, ay, bx, by, normalizedResidual)
+        return out
     }
 
     /**
@@ -410,10 +553,10 @@ object MorphEngine {
      *   - 弹簧过冲（t > 1）时公式自然外推，旋转与缩放会轻微过冲再回来。
      */
     fun interpolate(plan: Plan, t: Float, out: List<FloatArray>) {
+        val n = SAMPLES_PER_SUBPATH
         for (k in 0 until plan.subpathCount) {
-            val pair = plan.pairs[k]
-            val a = pair.src.points
-            val b = pair.dst.points
+            val a = plan.pairs[k].src.points
+            val bLocal = plan.targetLocal[k]
             val theta = plan.theta[k]
             val sigma = plan.sigma[k]
             val acx = plan.srcCentroid[k * 2]
@@ -431,18 +574,12 @@ object MorphEngine {
             val sa = sin(angle)
 
             val target = out[k]
-            val n = SAMPLES_PER_SUBPATH
             for (i in 0 until n) {
                 val px = a[i * 2] - acx
                 val py = a[i * 2 + 1] - acy
-                // b 搬到 a 的坐标系：先平移回原点、再反向旋转、再除以缩放
-                val qx0 = b[i * 2] - bcx
-                val qy0 = b[i * 2 + 1] - bcy
-                val qx = (cos(-theta) * qx0 - sin(-theta) * qy0) / sigma
-                val qy = (sin(-theta) * qx0 + cos(-theta) * qy0) / sigma
-                // 在 a 的坐标系里线性混合
-                val mx = px + (qx - px) * t
-                val my = py + (qy - py) * t
+                // 在 a 的坐标系里与 bT 线性混合
+                val mx = px + (bLocal[i * 2] - px) * t
+                val my = py + (bLocal[i * 2 + 1] - py) * t
                 // 再施加相似变换
                 target[i * 2] = cx + scale * (ca * mx - sa * my)
                 target[i * 2 + 1] = cy + scale * (sa * mx + ca * my)
