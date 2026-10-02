@@ -5,19 +5,37 @@
 
 ## 安装包
 
+**所有历史版本统一存放在 `releases/`**，每个版本一个独立子目录，互不覆盖。
+取用最新版：`releases/v1.0.1/apk/moyu-reader-1.0.1.apk`
+
 | | |
 |---|---|
-| 文件 | `app/build/outputs/apk/release/app-release.apk` |
-| 大小 | **2.29 MB** |
 | 包名 | `com.moyu.reader` |
-| 版本 | 1.0.0 (versionCode 1) |
+| 版本 | **1.0.1**（versionCode 2） |
+| 大小 | **2.31 MB** |
 | 最低版本 | Android 8.0（API 26） |
-| 目标版本 | Android 15（API 35） |
+| 目标版本 | **Android 16（API 36）** —— 对应澎湃 OS 3 所基于的版本 |
+| 架构 | arm64-v8a / armeabi-v7a / x86 / x86_64 |
 | 签名 | v2 方案，`CN=MoYu Reader`（仓库内自签名密钥，见下） |
-| SHA-256 | `BD51C86F72AC81D98D76798A0267B6247F6B717754C63BD5C5E2B5C4B9F63DDC` |
+| SHA-256 | `081351514EDB4EFF1144D9BBD9B608384AF585633AA70181386E246C87B638C4` |
 
 安装：把 APK 传到手机，用文件管理器点开安装（需允许「安装未知来源应用」）。
-另有一份便于取用的副本：`D:\work\墨阅-阅读器-v1.0.0.apk`（与上表同一文件）。
+
+### 版本规则
+
+每进行一次迭代都必须提升 `versionCode`（+1，绝不重复）与 `versionName`，
+并归档到新的 `releases/v<版本>/`。**不得覆盖任何历史版本的安装包**。
+
+完整规则、版本历史与各版本校验值见 **[`releases/VERSION.md`](releases/VERSION.md)**。
+
+`versionCode` 只能单调递增：一旦重复或倒退，系统会拒绝升级安装，
+用户只能卸载重装 —— 而卸载会清掉全部阅读数据。
+
+出包命令（自动完成「构建 → 版本化文件名 → 归档」，两个防覆盖机制都固化在构建里）：
+
+```bash
+./gradlew :app:release
+```
 
 > **密钥说明**：`app/keystore/moyu-release.jks`（口令均为 `moyureader`，别名 `moyu`）
 > 是仓库内的演示密钥，开源项目常见做法，便于任何人直接构建出可安装的 APK。
@@ -93,19 +111,23 @@ app/src/main/java/com/moyu/reader/
 
 ## 自己构建
 
-需要 JDK 17 与 Android SDK（platform 35、build-tools 35.0.0）。
+需要 JDK 17 与 Android SDK（platform 36、build-tools 36.x）。
 
 ```bash
 # gradle.properties 里已指向本机工具链，按需修改
 #   sdk.dir=D:\\AndroidToolchain\\sdk
 #   org.gradle.java.home=D:\\AndroidToolchain\\jdk\\jdk-17.0.13+11
 
-./gradlew :app:assembleDebug     # 调试包（21.1 MB，未压缩，便于排查）
-./gradlew :app:assembleRelease   # 发布包（2.29 MB，R8 压缩 + 资源裁剪 + 单 dex）
-./gradlew :app:testDebugUnitTest # 76 个单元测试（含 Robolectric，无需模拟器）
+./gradlew :app:assembleDebug     # 调试包（未压缩，便于排查）
+./gradlew :app:release           # 发布包：构建 + 版本化文件名 + 归档到 releases/
+./gradlew :app:testDebugUnitTest # 108 个单元测试（含 Robolectric，无需模拟器）
 ```
 
-R8 与资源裁剪都开着：调试包 13 个 dex / 21.1 MB → 发布包 1 个 dex / 2.29 MB，
+出包一律用 `:app:release`，不要用 `assembleRelease` ——
+前者会自动归档到 `releases/v<版本>/`，后者只把产物丢在 `build/` 下，
+下次 `clean` 就没了。
+
+R8 与资源裁剪都开着：调试包 13 个 dex → 发布包 1 个 dex / 2.31 MB，
 且 **R8 没有报任何 missing class 警告**（未生成 `missing_rules.txt`）。
 
 ## 已验证 / 未验证
