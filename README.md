@@ -120,8 +120,7 @@ app/src/main/java/com/moyu/reader/
 
 ./gradlew :app:assembleDebug     # 调试包（未压缩，便于排查）
 ./gradlew :app:release           # 发布包：构建 + 版本化文件名 + 归档到 releases/
-./gradlew :app:testDebugUnitTest # 108 个单元测试（含 Robolectric，无需模拟器）
-```
+./gradlew :app:testDebugUnitTest # 108 个单元测试（含 Robolectric，无需模拟器）```
 
 出包一律用 `:app:release`，不要用 `assembleRelease` ——
 前者会自动归档到 `releases/v<版本>/`，后者只把产物丢在 `build/` 下，
@@ -130,10 +129,15 @@ app/src/main/java/com/moyu/reader/
 R8 与资源裁剪都开着：调试包 13 个 dex → 发布包 1 个 dex / 2.31 MB，
 且 **R8 没有报任何 missing class 警告**（未生成 `missing_rules.txt`）。
 
+### 开发流程
+
+提交身份、分支模型、提交信息写法、合并前必须跑的验证、凭据管理 ——
+见 **[`DEVELOPMENT.md`](DEVELOPMENT.md)**。
+
 ## 已验证 / 未验证
 
 **已实测**
-- `:app:testDebugUnitTest` → **76 个测试全部通过**（纯 JVM 53 个 + Robolectric 23 个）
+- `:app:testDebugUnitTest` → **108 个测试全部通过**（含 Robolectric）
   - 编码探测 13、分章 15、阅读统计 15、分页 13、数据库 12、导入仓库 7、迁移 1
   - Robolectric 下跑的是**真实 SQLite 与真实 Room**：外键级联、事务回滚、
     `content` 不进内存的约定都是真验证的，不是 mock
