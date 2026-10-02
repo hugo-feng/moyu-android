@@ -165,6 +165,27 @@ object ChapterSplitter {
             val unit = RE_UNIT.find(line)?.groupValues?.getOrNull(1) ?: "章"
             val tail = cleanTitle(m.groupValues.getOrElse(2) { "" })
             val rebuilt = cleanTitle("第$num$unit")
+
+            /**
+             * 尾部像句子时，这一行不是标题，而是**正文里的一句话正好以
+             * 「第 N 节」开头**。
+             *
+             * 例如「第1节的故事从这里开始」—— 规则会命中，num="1"、
+             * tail="的故事从这里开始"。若不拦，它就成了一个假章节标题，
+             * 把正文从句子中间切开。
+             *
+             * 判据（任一成立即认为不是标题）：
+             *   - 尾部含句末标点：标题不会有句号/问号/感叹号
+             *   - 尾部过长：中文标题的副标题极少超过 16 字
+             *   - 尾部以「的/了/着/在/是」这类虚词开头：那是句子的延续
+             */
+            val tailIsProse = tail.isNotEmpty() && (
+                tail.any { it in "。！？；，、…" } ||
+                    tail.length > 16 ||
+                    tail.first() in "的了着在是和与就都也才还"
+                )
+            if (tailIsProse) return null
+
             return (if (tail.isNotEmpty()) "$rebuilt $tail" else rebuilt) to 0
         }
 
