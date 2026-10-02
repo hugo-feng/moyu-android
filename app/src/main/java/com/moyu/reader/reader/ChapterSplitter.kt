@@ -19,6 +19,30 @@ object ChapterSplitter {
     /** 中文数字，含大写与「两」「〇」。 */
     private const val CN_NUM = "[0-9零一二三四五六七八九十百千万两〇壹贰叁肆伍陆柒捌玖拾佰仟]"
 
+    /**
+     * 标题最长多少字之后就不像标题、而像正文了。
+     *
+     * 中文小说标题极少超过 20 字；超过说明这一行其实是正文句子
+     * （只是恰好以「第 X 章」开头）。
+     */
+    private const val MAX_PLAUSIBLE_TITLE_LENGTH = 24
+
+    /** 句末标点：出现它们说明这是正文句子，不是标题。 */
+    private val PROSE_ENDINGS = Regex("[。！？；…]$|[，、]$")
+
+    /**
+     * 判断一行「读起来像不像正文」而不是标题。
+     *
+     * 用于拦住**短篇里被误认成分隔语的行** —— 见 [split] 里的说明。
+     * 判据是长度与句末标点，与全文长短无关：按全文长度判断会误伤
+     * 合法的短文本（测试固件就是短文本）。
+     */
+    private fun looksLikeProse(title: String): Boolean {
+        val t = title.trim()
+        if (t.length > MAX_PLAUSIBLE_TITLE_LENGTH) return true
+        return PROSE_ENDINGS.containsMatchIn(t)
+    }
+
     /** 章节量词。 */
     private const val CN_UNIT = "章节回卷节篇部集话話"
 
@@ -252,6 +276,48 @@ object ChapterSplitter {
 
         // 仍然没有章节特征 → 按段落兜底切块
         if (candidates.isEmpty()) return chunkByParagraph(text, fallbackChunkSize)
+
+        /**
+         * 值不值得切 —— 只在「只有一个候选标题，且那个标题不像标题」时拦。
+         *
+         * ## 这一步在防什么
+         *
+         * 规则已经把「正文里的数字」这类误判挡掉了（只扫行首、跳过超长行、
+         * 低置信需高置信为空才启用）。剩下的情况是：
+         * **短篇小说里出现一行像章节标题的分隔语**。
+         *
+         * 例如一篇完整短篇，中间有一行「第二章」样式的分隔语 ——
+         * 全文被切成两节：第一节是开头一小段，第二节是剩下的全部。
+         * 用户看到的是「明明没有第二章，却自作聪明分成两节」。
+         *
+         * ## 为什么按「标题像不像」而不是按全文长度
+         *
+         * 起初我按全文长度拦（不足 8000 字且只有一个标题就不切），
+         * 结果把大量**合法的短文本**也拦掉了 —— 测试固件本身就是短文本，
+         * 于是「第二章 真正的标题」「楔子」这类明确标题全被判成分章失败。
+         *
+         * 可见长度不是判据。真正的差别在于**那一行读起来像不像标题**：
+         *   - 像标题：短（十几个字以内）、没有句末标点、自身就是完整的一行
+         *   - 像正文里被误认的行：很长（是完整句子被截断到行首）、
+         *     或带句号/问号/感叹号
+         *
+         * 因此判据是「标题长度 + 有无句末标点」，与全文长短无关。
+         * 拦住之后整篇作为一章，不会丢内容 ——
+         * 错切会让正文被割裂，比不分章更糟。
+         */
+        val onlyCandidate = candidates.singleOrNull()
+        if (onlyCandidate != null && looksLikeProse(onlyCandidate.title)) {
+            return listOf(
+                Chapter(
+                    index = 0,
+                    title = "全文",
+                    content = text,
+                    start = 0,
+                    length = text.length,
+                    detected = false,
+                )
+            )
+        }
 
         val chapters = mutableListOf<Chapter>()
         for (i in candidates.indices) {

@@ -227,4 +227,54 @@ class ChapterSplitterTest {
         assertFalse(ChapterSplitter.hasChapterMarkers("第一章 甲\n正文\n"))
         assertFalse(ChapterSplitter.hasChapterMarkers("没有任何章节标记的正文。\n"))
     }
+
+    // ------------------------------------------------------------------
+    // 过度切分：短篇里一行「像标题的正文」不应把整篇切成两节
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `短篇里唯一一行像标题的正文不会被切成两节`() {
+        // 真实反馈：一篇完整短篇，中间有一行恰好以「第二章」开头，
+        // 但那一行其实是正文句子（长、带句号）。原先会被当成章节标题，
+        // 全文于是被切成两节，第一节只有开头一小段。
+        // 用户原话：「明明没有出现明显的第二章，却自作聪明的把一篇完整短篇小说分成两节」。
+        val text = buildString {
+            append("这是一个完整短篇的开头部分，写的是一个人从雪夜出发上路。\n")
+            append("第二章的故事从这里开始讲起，他走进了一家很小的客栈坐在角落里。\n")
+            append("后面还有很多内容，但这一行其实是正文，不是章节标题。\n")
+        }
+        val chapters = ChapterSplitter.split(text)
+
+        assertEquals("不应切成多节", 1, chapters.size)
+        assertEquals("整篇作为一章", text.length, chapters[0].content.length)
+        assertFalse("不是检测出来的章节", chapters[0].detected)
+        assertLossless(text, chapters)
+    }
+
+    @Test
+    fun `带句末标点的单行也按正文处理`() {
+        // 长度没超限，但以句号结尾 —— 是句子而不是标题
+        val text = "正文开头一段足够长让它不像标题行。\n第三章 他离开了这里。\n后面还有内容。\n"
+        assertEquals(1, ChapterSplitter.split(text).size)
+    }
+
+    @Test
+    fun `真正的单一短标题仍然会被识别`() {
+        // 反向保护：判据改成「标题像不像」之后，
+        // 不能再把合法的短标题也拦掉 —— 那会让整本书只剩一章。
+        val text = "第一章 开端\n正文内容。\n"
+        val chapters = ChapterSplitter.split(text)
+        assertEquals(1, chapters.size)
+        assertTrue("应被识别为章节标题", chapters[0].detected)
+        assertTrue("标题应保留", chapters[0].title.contains("开端"))
+    }
+
+    @Test
+    fun `两个以上标题时不做像正文的拦截`() {
+        // 多处标题本身就是强结构信号，不应因为某一行形态而整体放弃切分。
+        val text = "第一章 甲\n正文。\n第二章 乙\n正文。\n"
+        val chapters = ChapterSplitter.split(text)
+        assertEquals(2, chapters.size)
+        assertLossless(text, chapters)
+    }
 }
