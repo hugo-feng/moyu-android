@@ -307,7 +307,21 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
 
         val paint = PaginationEngine.buildTextPaint(
             textSizePx = textSizePx,
-            typeface = if (prefs.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT,
+            /**
+             * 字体与字重必须与渲染侧**完全一致**。
+             *
+             * 这里早先写的是 `Typeface.DEFAULT`（或粗体），而渲染用的是
+             * 设置里选的字体系列。字体一变，每个字的宽度就变，
+             * 换行位置随之改变 —— 分页算出的页边界与真正画出来的对不上，
+             * 表现是「页末那行明明还有空间却被推到下一页」或反过来文字越界。
+             *
+             * 现在两侧都从同一个 FontFamilyId 推导：
+             * 族名走 fontFamilyNameFor，字重走 typefaceStyleFor。
+             */
+            typeface = Typeface.create(
+                com.moyu.reader.ui.theme.fontFamilyNameFor(prefs.fontFamily),
+                com.moyu.reader.ui.theme.typefaceStyleFor(prefs.fontFamily),
+            ),
             letterSpacingEm = prefs.letterSpacingEm,
         )
 

@@ -1203,7 +1203,19 @@ private fun bodyTextStyle(settings: com.moyu.reader.data.prefs.ReaderSettings): 
     fontSize = settings.fontSizeSp.sp,
     lineHeight = (settings.fontSizeSp * settings.lineHeightMultiplier).sp,
     letterSpacing = settings.letterSpacingEm.sp,
-    fontWeight = if (settings.bold) FontWeight.Medium else FontWeight.Normal,
+    /**
+     * 字重。
+     *
+     * 与分页引擎的 `typefaceStyleFor` 是同一条规则的两个表达：
+     * 从同一个 FontFamilyId 推导，两侧必须一致，否则换行位置不同、
+     * 分页与显示错位。`settings.bold`（用户单独勾选的加粗）与
+     * 字体本身自带的字重取「更粗的那个」。
+     */
+    fontWeight = if (settings.bold) {
+        FontWeight.Medium
+    } else {
+        com.moyu.reader.ui.theme.fontWeightFor(settings.fontFamily)
+    },
     textAlign = if (settings.justify) TextAlign.Justify else TextAlign.Start,
     /**
      * 断行策略。

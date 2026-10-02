@@ -110,7 +110,8 @@ fun ShelfScreen(
     val items by viewModel.items.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val shelfCount by viewModel.shelfCount.collectAsStateWithLifecycle()
-    val continueItem by viewModel.continueReading.collectAsStateWithLifecycle()
+    // 「继续阅读」卡片已从书库页移除（属于统计/历史的职责），
+    // 因此这里不再订阅 continueReading。
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     // 筛选标签已移除：分组改用卡片钻入（见 groupCards / openGroup）。
     // 「全部 / 在读 / 未读 / 已读完」那排标签按用户要求删掉了 ——
@@ -146,33 +147,28 @@ fun ShelfScreen(
          * 统计数字与统计入口留在那里，书架页保持干净。
          */
         if (libraryMode) {
+            /**
+             * 书库顶部只有两样东西：标题栏（含统计入口）与搜索框。
+             *
+             * 按用户要求删掉了：
+             *   - 三个统计数字（书籍数 / 已读完 / 本周时长）—— 「这些都应该在统计里显示」
+             *   - 「继续阅读」卡片 —— 同样属于统计与历史
+             *   - 导入按钮 —— 「导入按钮只出现在设置里」
+             *
+             * 统计入口保留在右上角的箭头上：它是一个**入口**而不是数据本身，
+             * 删掉的话统计页就没有任何可达路径了（底栏的统计标签也已移除）。
+             */
             item {
-                ShelfHeader(
+                LibraryTopBar(
                     greeting = viewModel.greeting(),
-                    stats = stats,
-                    libraryMode = true,
+                    totalBooks = stats.total,
                     shelfCount = shelfCount,
                     onOpenStats = onOpenStats,
                 )
             }
 
-            if (continueItem != null) {
-                item {
-                    ContinueReadingCard(
-                        item = continueItem!!,
-                        onClick = { onOpenBook(continueItem!!.book.id) },
-                        modifier = Modifier.padding(horizontal = 14.dp),
-                    )
-                }
-            }
-
-            // 排序与布局已移到设置页（见 SettingsScreen 的外观与主题 / 书架分组）。
-            // 这里只剩「搜索全书内容」与「导入」两个高频动作。
             item {
-                SubHeaderActions(
-                    onSearch = { onOpenSearch(null) },
-                    onImport = onOpenImport,
-                )
+                LibrarySearchBar(onClick = { onOpenSearch(null) })
             }
         } else {
             item {
@@ -372,17 +368,31 @@ fun ShelfScreen(
     }
 }
 
-/** 顶部：问候语 + 概览数字 + 统计入口。 */
+/**
+ * 书库顶栏：问候语 + 「书库」标题 + 一行附注 + 统计入口。
+ *
+ * ## 为什么这里是这副样子
+ *
+ * 用户明确要求：「书库主页不应该显示阅读分钟、继续阅读、已读完、书籍数等等，
+ * 这些都应该在统计里显示」。
+ *
+ * 因此这一栏**不再显示任何统计数字**，只留：
+ *   - 问候语（时间感，成本极低）
+ *   - 标题「书库」
+ *   - 一行附注：总共几本、其中几本在书架 —— 这是「我在哪、有多少」的定位信息，
+ *     不是统计指标；书库页需要它，否则用户不知道自己在看全部还是子集
+ *   - 右上角箭头：进统计页。**必须保留这个入口** ——
+ *     底栏的统计标签已按用户要求移除，删掉它就再也没有路径能进统计页了
+ */
 @Composable
-private fun ShelfHeader(
+private fun LibraryTopBar(
     greeting: String,
-    stats: ShelfStats,
-    libraryMode: Boolean,
+    totalBooks: Int,
     shelfCount: Int,
     onOpenStats: () -> Unit,
 ) {
     val palette = moyuPalette()
-    Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp)) {
+    Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = greeting,
@@ -397,45 +407,58 @@ private fun ShelfHeader(
             )
         }
         Text(
-            text = if (libraryMode) "书库" else "书架",
+            text = "书库",
             style = MaterialTheme.typography.headlineLarge,
             color = palette.text,
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = 2.dp),
         )
-        // 副标题说明两边的区别 —— 不写的话用户不知道书库与书架差在哪，
-        // 会以为「加入书架」是个没有作用的按钮。
         Text(
-            text = if (libraryMode) {
-                "本机全部书籍（$shelfCount 本已在书架）"
-            } else {
-                "已加入书架的书"
-            },
+            text = "本机全部书籍 · 共 $totalBooks 本（$shelfCount 本已在书架）",
             style = MaterialTheme.typography.labelSmall,
             color = palette.textSecondary,
             modifier = Modifier.padding(top = 2.dp),
         )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 14.dp)
-                .height(1.dp)
-                .background(palette.divider),
-        )
-
-        Row(
-            modifier = Modifier.padding(top = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(26.dp),
-        ) {
-            StatCell(value = "${stats.total}", label = "书籍数")
-            StatCell(value = "${stats.finished}", label = "已读完")
-            StatCell(
-                value = com.moyu.reader.reader.ReadingStatsCalculator.formatSeconds(stats.weekSeconds),
-                label = "本周阅读时长",
-            )
-        }
     }
 }
+
+/**
+ * 书库页的搜索栏。
+ *
+ * 用户要求「书库主页的搜索栏应该在书库页的顶部」——
+ * 它现在就在标题正下方，是一个看起来像输入框的按钮（点击进入搜索页）。
+ *
+ * 做成「假输入框」而不是直接放一个 TextField：真正的搜索需要整页结果列表
+ * （跨书、跨章、带上下文），内联在书库页里放不下。
+ * 这样既在视觉上占住了顶部的显眼位置，又不牺牲搜索结果的展示空间。
+ */
+@Composable
+private fun LibrarySearchBar(onClick: () -> Unit) {
+    val palette = moyuPalette()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(palette.card)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = null,
+            tint = palette.textSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "搜索书名、作者或全书内容",
+            style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary,
+        )
+    }
+}
+
 
 @Composable
 private fun StatCell(value: String, label: String) {
@@ -455,63 +478,6 @@ private fun StatCell(value: String, label: String) {
     }
 }
 
-/** 继续阅读大卡。 */
-@Composable
-private fun ContinueReadingCard(
-    item: com.moyu.reader.data.model.ShelfItem,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val palette = moyuPalette()
-    Row(
-        modifier = modifier
-            .padding(top = 18.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(palette.card)
-            .clickable(onClick = onClick)
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BookCover(book = item.book, percent = item.percent, finished = item.finished, width = 54.dp)
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 14.dp),
-        ) {
-            Text(
-                text = "继续阅读",
-                style = MaterialTheme.typography.labelSmall,
-                color = palette.primary,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = item.book.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = palette.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 3.dp),
-            )
-            Text(
-                text = readingProgressLabel(item),
-                style = MaterialTheme.typography.bodySmall,
-                color = palette.textSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-
-        Icon(
-            imageVector = Icons.Filled.ChevronRight,
-            contentDescription = null,
-            tint = palette.textSecondary,
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
 
 private fun readingProgressLabel(item: com.moyu.reader.data.model.ShelfItem): String = when {
     item.finished -> "已读完"
@@ -527,29 +493,6 @@ private fun readingProgressLabel(item: com.moyu.reader.data.model.ShelfItem): St
  * 只会让页面显得杂乱（用户的原话是「这太难看了」）。
  */
 
-/**
- * 书库页的次要操作行：搜索 + 导入。
- *
- * 布局切换与排序**不在这里** —— 它们已移到设置页。
- * 那两个是「设一次就不动」的偏好，每次进书库都看到一排标签
- * 只会让页面显得杂乱（用户的原话是「这太难看了」）。
- */
-@Composable
-private fun SubHeaderActions(
-    onSearch: () -> Unit,
-    onImport: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        MoyuTextButton(text = "搜索", icon = Icons.Filled.Search, onClick = onSearch)
-        MoyuTextButton(text = "导入", icon = Icons.Filled.Upload, onClick = onImport)
-    }
-}
 
 /** 书架页的标题行：一个标题 + 一个数量，必要时带返回。 */
 @Composable

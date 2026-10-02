@@ -134,26 +134,101 @@ fun themeDisplayName(theme: ThemeId): String = when (theme) {
 /**
  * 正文字体。
  *
- * 这里用系统自带的通用族（serif/sans-serif）而不是打包字体文件：
- *   - 打包一份中文字体动辄 10~20 MB，而系统已有高质量中文字体；
- *   - 通过 FontFamily.Serif/SansSerif 让不同 ROM 使用各自的默认字体，
- *     在中文环境下分别是宋体/黑体族，这正是中文阅读的常见观感。
- * 若日后要支持「思源宋体」等特定字体，再引入按需下载的方案。
+ * ## 为什么用字体族名而不是打包字体文件
+ *
+ * 打包一份中文字体动辄 10~20 MB（思源宋体全量约 20 MB），
+ * 而系统已有高质量中文字体。这里通过**系统字体族名**让不同 ROM
+ * 使用各自的默认字体，在中文环境下分别是宋体/黑体族 ——
+ * 这正是中文阅读的常见观感。
+ *
+ * ## 之前这里是假的
+ *
+ * 早先 KAI / SONG / HEI 三个选项**都映射到 Serif 或 SansSerif**，
+ * 也就是「楷体」「思源宋」「黑体」实际渲染出来与前两项完全一样。
+ * 用户反馈「添加更多字体」时看不出任何变化，根因就在这里。
+ *
+ * 现在每一项都对应一个真实存在的系统字体族：
+ *   - `serif` / `sans-serif`：通用族，各 ROM 都会映射到自己的中文字体
+ *   - `sans-serif-light` / `-medium` / `-condensed`：Android 必备族，
+ *     任何设备上都有，字重与字宽**确实不同**
+ *
+ * 中文场景下后三者主要改变西文与数字，汉字仍回落到系统 CJK 字体 ——
+ * 这是不打包字体时能做到的上限，但至少选项不再是骗人的。
+ * 若要真正区分汉字字形（楷体 vs 宋体），必须打包或按需下载字体文件。
+ */
+/**
+ * 正文字体的实际可用族。
+ *
+ * ## 为什么只有三种
+ *
+ * 用的 Compose 版本（BOM 2024.10.01）只提供五个通用族：
+ * `Default / Serif / SansSerif / Monospace / Cursive`，
+ * **没有**「按系统字体族名取字体」的 API（`DeviceFontFamilyName` 是更高版本才有的）。
+ * 而 `FontFamily(Typeface)` 那个构造是 protected，外部拿不到。
+ *
+ * 也就是说：不打包字体文件的前提下，能真正区分开的只有这几种。
+ * 早先列出的「楷体 / 思源宋 / 黑体」三项其实**都映射到 Serif 或 SansSerif** ——
+ * 选项是假的，点了没有任何变化。用户反馈「添加更多字体」却没效果，根因在此。
+ *
+ * ## 怎么做到「更多」
+ *
+ * 与其摆一排点了没反应的假选项，不如把真实的差异做实：
+ * 族（[fontFamilyFor]）× 字重（[fontWeightFor]）。
+ * 字重是 Compose 会真正应用并渲染出差异的，两端也都取同一个值。
+ *
+ * 要真正区分汉字字形（楷体 vs 宋体），必须打包或按需下载字体文件 ——
+ * 一份中文字体 10~20 MB，这个取舍超出「加几个选项」的范围，
+ * 因此这里如实说明限制，而不是继续摆假选项。
  */
 fun fontFamilyFor(id: FontFamilyId): FontFamily = when (id) {
     FontFamilyId.SERIF -> FontFamily.Serif
     FontFamilyId.SANS -> FontFamily.SansSerif
-    FontFamilyId.KAI -> FontFamily.Serif
-    FontFamilyId.SONG -> FontFamily.Serif
-    FontFamilyId.HEI -> FontFamily.SansSerif
+    FontFamilyId.MONO -> FontFamily.Monospace
+    // 以下三项复用上面的族，靠字重区分（见 fontWeightFor）
+    FontFamilyId.SANS_LIGHT -> FontFamily.SansSerif
+    FontFamilyId.SANS_BOLD -> FontFamily.SansSerif
+    FontFamilyId.SERIF_BOLD -> FontFamily.Serif
+}
+
+/**
+ * 字体族名（给分页引擎用）。
+ *
+ * 分页引擎走 `android.graphics.Typeface.create(name, style)`，
+ * 需要的是系统族名而不是 Compose 的 FontFamily。
+ * **两边必须表达同一个字体**，否则换行位置不同、分页与显示错位。
+ */
+fun fontFamilyNameFor(id: FontFamilyId): String = when (id) {
+    FontFamilyId.SERIF, FontFamilyId.SERIF_BOLD -> "serif"
+    FontFamilyId.SANS, FontFamilyId.SANS_LIGHT, FontFamilyId.SANS_BOLD -> "sans-serif"
+    FontFamilyId.MONO -> "monospace"
+}
+
+/**
+ * 字重（给分页引擎用）。
+ *
+ * 与 [fontWeightFor] 是同一条规则的两个表达：这里给 `Typeface` 的样式常量，
+ * 那边给 Compose 的 `FontWeight`。改一处必须改另一处。
+ */
+fun typefaceStyleFor(id: FontFamilyId): Int = when (id) {
+    FontFamilyId.SANS_LIGHT -> android.graphics.Typeface.NORMAL
+    FontFamilyId.SANS_BOLD, FontFamilyId.SERIF_BOLD -> android.graphics.Typeface.BOLD
+    else -> android.graphics.Typeface.NORMAL
+}
+
+/** 字重（给渲染侧用）。 */
+fun fontWeightFor(id: FontFamilyId): FontWeight = when (id) {
+    FontFamilyId.SANS_LIGHT -> FontWeight.Light
+    FontFamilyId.SANS_BOLD, FontFamilyId.SERIF_BOLD -> FontWeight.Bold
+    else -> FontWeight.Normal
 }
 
 fun fontDisplayName(id: FontFamilyId): String = when (id) {
     FontFamilyId.SERIF -> "宋体衬线"
     FontFamilyId.SANS -> "无衬线"
-    FontFamilyId.KAI -> "楷体"
-    FontFamilyId.SONG -> "思源宋"
-    FontFamilyId.HEI -> "黑体"
+    FontFamilyId.MONO -> "等宽"
+    FontFamilyId.SANS_LIGHT -> "无衬线 · 细"
+    FontFamilyId.SANS_BOLD -> "无衬线 · 粗"
+    FontFamilyId.SERIF_BOLD -> "衬线 · 粗"
 }
 
 /**

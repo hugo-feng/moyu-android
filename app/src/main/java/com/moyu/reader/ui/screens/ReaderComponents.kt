@@ -535,14 +535,18 @@ fun TypographySheet(
             )
 
             // —— 字体 ——
+            //
+            // 原先这里是 `FontFamilyId.entries.take(3)` —— 只渲染前三个，
+            // 后面新增的字体选项**根本不会显示**。用户要求「添加更多字体」
+            // 却看不到任何变化，有一半原因就在这里。
+            //
+            // 现在用可换行的 ChipRow 把全部字体都列出来：
+            // 一行放不下会自然折行，不需要手动截断。
             SheetGroupTitle("字体")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            com.moyu.reader.ui.components.ChipRow(
+                modifier = Modifier.padding(horizontal = 16.dp),
             ) {
-                FontFamilyId.entries.take(3).forEach { font ->
+                FontFamilyId.entries.forEach { font ->
                     MoyuChip(
                         text = fontDisplayName(font),
                         active = settings.fontFamily == font,

@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.data.prefs
+package com.moyu.reader.data.prefs
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -33,8 +33,17 @@ enum class ThemeId { PAPER, SEPIA, GREEN, NIGHT, INK }
  */
 enum class PageMode { COVER, SCROLL, NONE }
 
-/** 字体系列。 */
-enum class FontFamilyId { SERIF, SANS, KAI, SONG, HEI }
+/**
+ * 字体系列。
+ *
+ * 每一项都对应**真实可区分**的字体（族 × 字重），见 fontFamilyFor / fontWeightFor。
+ *
+ * 早先的 KAI / SONG / HEI 三项都映射到 Serif 或 SansSerif，
+ * 等于选项是假的 —— 用户点了看不出任何变化。
+ * 用的 Compose 版本没有「按系统族名取字体」的 API，
+ * 因此不打包字体文件时能真正区分开的就只有这几种，如实列出。
+ */
+enum class FontFamilyId { SERIF, SANS, MONO, SANS_LIGHT, SANS_BOLD, SERIF_BOLD }
 
 /** 书架排序方式。 */
 enum class ShelfSort { RECENT, ADDED, TITLE, AUTHOR, PROGRESS }
