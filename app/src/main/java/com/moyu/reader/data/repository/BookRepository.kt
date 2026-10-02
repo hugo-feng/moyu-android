@@ -343,7 +343,7 @@ class BookRepository(
         val title = fileName.substringBeforeLast('.').trim().ifEmpty { "未命名文档" }
         val note = buildString {
             append("［PDF 文档］\n\n")
-            append("墨阅把 PDF 作为整页渲染，不提取其中的文字。\n")
+            append("Reader 把 PDF 作为整页渲染，不提取其中的文字。\n")
             append("因此这个条目保存的是书库记录与阅读位置；")
             append("如需按字号重排阅读，请导入该书的 TXT 或 EPUB 版本。")
         }

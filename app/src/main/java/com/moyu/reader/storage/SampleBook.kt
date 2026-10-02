@@ -16,7 +16,7 @@ import com.moyu.reader.data.repository.BookRepository
 object SampleBook {
 
     const val TITLE = "剑影长歌"
-    const val AUTHOR = "墨阅示例"
+    const val AUTHOR = "Reader 示例"
 
     /** 通过仓储导入示例书，走与真实导入完全相同的路径（避免出现「示例书走特例逻辑」的隐患）。 */
     suspend fun importInto(repo: BookRepository): ImportResult {
@@ -33,7 +33,7 @@ object SampleBook {
         append("《").append(TITLE).append("》\n")
         append("作者：").append(AUTHOR).append('\n')
         append("简介：一个少年从雪夜山道出发，走过剑冢与听雨楼，最终把名字留在江湖上的故事。")
-        append("本示例文本由墨阅项目原创，仅用于功能演示。\n\n")
+        append("本示例文本由 Reader 项目原创，仅用于功能演示。\n\n")
 
         val chapters = listOf(
             "楔子 雪夜" to 6,

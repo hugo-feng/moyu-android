@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  墨阅 · 本地阅读器
+  Reader · 本地阅读器
 
   权限设计（刻意保持为空）：
     1. 本地书通过 SAF（存储访问框架）由用户主动授权文件夹或文件，
@@ -64,7 +64,7 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
-            <!-- 支持从文件管理器「分享到墨阅」 -->
+            <!-- 支持从文件管理器「分享到 Reader」 -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

@@ -309,7 +309,7 @@ fun SettingsScreen(
             if (page == SettingsPage.ABOUT) {
             GroupTitle("关于")
             SettingRow(
-                label = "墨阅 · 本地阅读器",
+                label = "Reader · 本地阅读器",
                 hint = "版本 ${com.moyu.reader.BuildConfig.VERSION_NAME}",
             )
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {

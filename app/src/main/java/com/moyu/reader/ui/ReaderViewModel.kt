@@ -82,6 +82,51 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     private val _flipToken = MutableStateFlow(0)
     val flipToken: StateFlow<Int> = _flipToken.asStateFlow()
 
+    /**
+     * 翻页前的那一页，供动画使用。
+     *
+     * ## 为什么需要单独存一份
+     *
+     * 真实的翻页动画必须**两页同时在场地**：仿真要露出下面那页，
+     * 平移要两页一起推，覆盖要旧页不动、新页盖上去。
+     * 但 ViewModel 只保存「当前页」，翻页瞬间旧页的文本与页码就没了 ——
+     * 这正是三种模式看起来一模一样的根因：
+     * 旧页不存在，动画只能让新页自己淡入/位移，参数再怎么调都不像翻页。
+     *
+     * 存的是**渲染一页所需的全部信息**（文本切片、页码、是否章首页、章标题），
+     * 而不是只存一个页码 —— 因为跨章翻页时新旧两页属于不同章节，
+     * 只存页码会在新章节的分页表里查到错误的内容。
+     */
+    data class PageSnapshot(
+        val text: String,
+        val pageNumber: Int,
+        val showTitle: Boolean,
+        val chapterTitle: String,
+        val chapterNumberLabel: String,
+        val pageStart: Int,
+    )
+
+    private val _outgoingPage = MutableStateFlow<PageSnapshot?>(null)
+    val outgoingPage: StateFlow<PageSnapshot?> = _outgoingPage.asStateFlow()
+
+    /** 把当前页快照进 [outgoingPage]，翻页前调用。 */
+    private fun captureOutgoing() {
+        val chapter = _currentChapter.value ?: return
+        val page = _pages.value.getOrNull(_pageIndex.value) ?: return
+        _outgoingPage.value = PageSnapshot(
+            text = chapter.content.substring(
+                page.start.coerceIn(0, chapter.content.length),
+                page.end.coerceIn(0, chapter.content.length),
+            ),
+            pageNumber = _pageIndex.value + 1,
+            showTitle = page.start == 0,
+            chapterTitle = chapter.title,
+            chapterNumberLabel = com.moyu.reader.reader.ChapterLabels
+                .labelFor(chapter.title, _chapterIndex.value),
+            pageStart = page.start,
+        )
+    }
+
     // —— 笔记 ——
     private val _bookmarks = MutableStateFlow<List<Bookmark>>(emptyList())
     val bookmarks: StateFlow<List<Bookmark>> = _bookmarks.asStateFlow()
@@ -366,6 +411,8 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         _forward.value = delta > 0
 
         if (target in pages.indices) {
+            // 先把当前页快照下来再改索引：翻页动画需要它作为「下面那页」
+            captureOutgoing()
             _pageIndex.value = target
             _flipToken.value++
             schedulePersist()
@@ -379,6 +426,7 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             _message.value = if (delta > 0) "已经是最后一章了" else "已经是第一章了"
             return
         }
+        captureOutgoing()
         _flipToken.value++
         scope.launch {
             val bookId = _book.value?.id ?: return@launch
@@ -398,6 +446,7 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         val headers = _chapterHeaders.value
         if (index !in headers.indices) return
         _forward.value = index > _chapterIndex.value
+        captureOutgoing()
         _flipToken.value++
         loadChapter(index, offset, density)
         schedulePersist()
@@ -510,6 +559,46 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     fun setSelection(start: Int, end: Int, text: String) {
         _selection.value = if (end > start && text.isNotBlank()) TextSelection(start, end, text) else null
     }
+
+    /**
+     * 长按取词：把「章内字符下标」扩成一个合理的选区。
+     *
+     * 为什么需要它：Compose 的 [androidx.compose.foundation.text.selection.SelectionContainer]
+     * 只提供**拖拽手柄**式的选择，**没有长按自动选中一个词**的行为。
+     * 用户长按一个词却什么都没有发生 —— 真机上反馈的就是这个。
+     *
+     * 取词规则按中英文分开处理，因为两者的「词」概念完全不同：
+     *   - 英文/数字：连续的字母数字算一个词（`ReaderViewModel` 的 isWordChar）
+     *   - 中文/日文：**单个汉字就是一个词**。中文没有词间空格，
+     *     想按「词」切分需要分词词典；而标注场景下选中一两个字通常就够用了，
+     *     为此引入一个词典得不偿失。所以长按选中一个汉字，用户可以再拖手柄扩展。
+     *
+     * @param chapterOffset 章内字符下标（不是页内下标 —— 书签与笔记存的是章内偏移）
+     */
+    fun selectWordAt(chapterOffset: Int) {
+        val chapter = _currentChapter.value ?: return
+        val content = chapter.content
+        if (chapterOffset !in content.indices) return
+
+        val anchor = content[chapterOffset]
+        var start = chapterOffset
+        var end = chapterOffset + 1
+
+        if (isWordChar(anchor)) {
+            // 西文：向两侧扩到词边界
+            while (start > 0 && isWordChar(content[start - 1])) start--
+            while (end < content.length && isWordChar(content[end])) end++
+        }
+        // 汉字与标点：只选中按下那一个字符，由用户拖手柄扩展
+
+        val text = content.substring(start, end)
+        if (text.isBlank()) return
+        _selection.value = TextSelection(start, end, text)
+    }
+
+    /** 西文「词」的构成字符：字母、数字、下划线，以及词内的连字符与撇号。 */
+    private fun isWordChar(c: Char): Boolean =
+        c.isLetterOrDigit() && c.code < 0x2E80 || c == '_' || c == '\'' || c == '-'
 
     fun clearSelection() {
         _selection.value = null
