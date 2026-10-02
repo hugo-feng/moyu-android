@@ -1,11 +1,10 @@
-package com.moyu.reader.ui.screens
+﻿package com.moyu.reader.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,23 +19,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FormatSize
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -60,7 +46,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,10 +54,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.moyu.reader.data.prefs.PageMode
-import com.moyu.reader.data.prefs.ThemeId
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.ReaderViewModel
-import com.moyu.reader.ui.components.IconAction
 import com.moyu.reader.ui.navigationBarHeightPx
 import com.moyu.reader.ui.statusBarHeightPx
 import com.moyu.reader.ui.theme.fontFamilyFor
@@ -410,11 +393,14 @@ fun ReaderScreen(
                 bookTitle = book?.title.orEmpty(),
                 chapterTitle = chapter?.title.orEmpty(),
                 speaking = ttsState == com.moyu.reader.reader.TtsController.State.SPEAKING,
+                bookmarked = currentPageBookmark != null,
                 onBack = {
                     viewModel.persistNow()
                     onExit()
                 },
                 onSpeak = { viewModel.toggleSpeech(density) },
+                onSearch = { onOpenSearch(bookId) },
+                onToggleBookmark = { viewModel.toggleBookmarkAtPage() },
                 modifier = Modifier.align(Alignment.TopCenter),
             )
         }
@@ -425,16 +411,11 @@ fun ReaderScreen(
                 chapterIndex = chapterIndex,
                 chapterCount = chapterHeaders.size,
                 onChapterSeek = { index -> viewModel.jumpToChapter(index, density) },
-                autoReading = autoReading,
-                isNight = settings.theme == ThemeId.NIGHT,
-                bookmarked = currentPageBookmark != null,
                 onToc = { sheet = if (sheet == ReaderSheet.TOC) ReaderSheet.NONE else ReaderSheet.TOC },
                 onNotes = { sheet = if (sheet == ReaderSheet.NOTES) ReaderSheet.NONE else ReaderSheet.NOTES },
-                onToggleBookmark = { viewModel.toggleBookmarkAtPage() },
-                onToggleNight = { viewModel.quickToggleNight() },
-                onToggleAuto = { viewModel.toggleAutoRead(density) },
-                onSearch = { onOpenSearch(bookId) },
-                onTypography = { sheet = if (sheet == ReaderSheet.TYPOGRAPHY) ReaderSheet.NONE else ReaderSheet.TYPOGRAPHY },
+                onSettings = {
+                    sheet = if (sheet == ReaderSheet.TYPOGRAPHY) ReaderSheet.NONE else ReaderSheet.TYPOGRAPHY
+                },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -624,12 +605,11 @@ private fun PagedReader(
     }
     val progress by animateFloatAsState(
         targetValue = if (entered) 1f else 0f,
-        animationSpec = tween(durationMillis = if (settings.pageMode == PageMode.NONE) 0 else 320),
+        // 覆盖用 240ms；无动画模式不发任何过渡。
+        animationSpec = tween(durationMillis = if (settings.pageMode == PageMode.NONE) 0 else 240),
         label = "pageFlip",
     )
 
-    // 动画进行中才画旧页。画完就撤掉，否则它会一直叠在下面白耗一层合成。
-    val animating = entered && progress < 0.999f
     val outgoing = viewModel.outgoingPage.collectAsStateWithLifecycle().value
     val forward by viewModel.forward.collectAsStateWithLifecycle()
 
@@ -643,44 +623,19 @@ private fun PagedReader(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             /**
-             * 即将翻走的那一页，画在下层。
+             * 这里**刻意不画「即将翻走的那一页」**。
              *
-             * 它存在与否，正是「三种模式看起来不一样」的关键：
-             * 只有一页在场时，无论新页怎么位移/旋转都不像翻页 ——
-             * 因为真实的翻页里，旧页要么被推走、要么留在原地被盖住、要么被掀起。
+             * 用户反馈「前一页的文字和后一页的文字重叠」。根因就是两层页面
+             * 同时绘制：新页从右侧滑入时，屏幕左边是旧页的字、右边是新页的字，
+             * 同一屏出现两套正文 —— 看起来就是文字重叠。
+             * 仿真模式（两页各自旋转）最严重，覆盖模式（新页盖上来）同样存在。
+             *
+             * 用户的要求是删掉仿真、去掉平移动画。现在彻底只画一页：
+             * 新页做一次整页滑入，任何一帧都只有一套文字，不可能重叠。
+             *
+             * [viewModel.outgoingPage] 的快照仍保留 —— 分页测量与
+             * 「无动画」模式还会用到它，删掉会让将来想恢复单页过渡时无从下手。
              */
-            if (animating && outgoing != null) {
-                val g = pageGeometry(
-                    mode = settings.pageMode,
-                    progress = progress,
-                    incoming = false,
-                    forward = forward,
-                    widthPx = pageWidthPx,
-                )
-                ReaderPage(
-                    text = outgoing.text,
-                    pageNumber = outgoing.pageNumber,
-                    showTitle = outgoing.showTitle,
-                    chapterTitle = outgoing.chapterTitle,
-                    chapterNumberLabel = outgoing.chapterNumberLabel,
-                    settings = settings,
-                    highlights = highlights,
-                    pageStart = outgoing.pageStart,
-                    percent = percent,
-                    viewModel = viewModel,
-                    uiDensity = uiDensity,
-                    // 旧页不上报尺寸：两页尺寸一致时来回覆盖没有意义，
-                    // 不一致时更会把分页测量值搞乱
-                    onContentSize = null,
-                    modifier = Modifier.graphicsLayer {
-                        translationX = g.translationX
-                        rotationY = g.rotationY
-                        scaleX = g.scaleX
-                        alpha = g.alpha
-                        cameraDistance = 20f * uiDensity.density
-                    },
-                )
-            }
 
             // 即将翻到的那一页，画在上层
             val incomingGeometry = pageGeometry(
@@ -856,31 +811,22 @@ private fun pageGeometry(
     val dir = if (forward) 1f else -1f
 
     return when (mode) {
-        // 平移：两页一起沿横向推移，像卷轴。旧页左移出新页右移入。
-        com.moyu.reader.data.prefs.PageMode.SLIDE -> {
-            val offset = remaining * widthPx * dir
-            if (incoming) PageGeometry(offset, 0f, 1f, 1f)
-            else PageGeometry(-widthPx * dir + offset, 0f, 1f, 1f)
-        }
-
-        // 覆盖：旧页**完全不动**，新页从右侧盖上来。
-        // 「不动」正是覆盖与平移的本质区别 —— 平移时旧页会跟着走。
+        /**
+         * 覆盖：旧页**完全不动**，新页从右侧盖上来。
+         *
+         * 这是唯一保留的带动画翻页方式。
+         *
+         * 原先还有「平移」与「仿真」两种，都已删除 —— 它们在真机上
+         * 会让**前一页与后一页的文字重叠**：两者同时绘制、各自做位移或旋转，
+         * 正文笔画在中间帧互相穿插。覆盖没有这个问题，因为旧页始终静止，
+         * 新页是完整地盖上去的（不透明，不会透出下面的字）。
+         */
         com.moyu.reader.data.prefs.PageMode.COVER -> {
             if (incoming) PageGeometry(remaining * widthPx * dir, 0f, 1f, 1f)
             else PageGeometry(0f, 0f, 1f, 1f)
         }
 
-        // 仿真：新页绕左缘旋转，旧页反向小幅旋转，像把纸掀起来。
-        // 透视靠 cameraDistance（在 graphicsLayer 里设），缺了它只会看到横向压缩。
-        com.moyu.reader.data.prefs.PageMode.SIMULATION -> {
-            if (incoming) {
-                PageGeometry(0f, -remaining * 90f * dir, 1f, 1f)
-            } else {
-                PageGeometry(0f, remaining * 14f * dir, 1f, 1f)
-            }
-        }
-
-        // 无动画：不做任何变换，靠 alpha 收尾避免闪一下
+        // 无动画：直接切换。alpha 只用来避免切换瞬间闪一下白。
         com.moyu.reader.data.prefs.PageMode.NONE -> PageGeometry(0f, 0f, 1f, if (incoming) p else 1f - p)
 
         // 滚动模式不走翻页动画（由 ScrollReader 单独处理）
@@ -967,8 +913,15 @@ private fun ReaderPage(
                     },
                 ),
         ) {
-            SelectionContainer {
-                Column(modifier = Modifier.fillMaxSize()) {
+            /**
+             * 这里**不再包 SelectionContainer**。
+             *
+             * 正文改用 `BasicTextField(readOnly = true)` 之后，选区已由它自己
+             * 实现（原生长按选词 + 拖拽手柄）。外面再套一层 SelectionContainer
+             * 会出现两个选区系统：手柄能拖，但拖出来的区间不一定被我们收到，
+             * 表现为「能选却弹不出标注条」。
+             */
+            Column(modifier = Modifier.fillMaxSize()) {
                     if (showTitle) {
                         // 标题块单独测量：首页要按它扣掉几行，其余页不扣。
                         // 间距用 Spacer 而不是 padding，这样测到的高度
@@ -996,44 +949,81 @@ private fun ReaderPage(
                         }
                     }
                     /**
-                     * 正文。长按取词 → 弹出标注操作条。
+                     * 正文。长按选词 → 弹出标注操作条。
                      *
-                     * `onTextLayout` 拿到 [androidx.compose.ui.text.TextLayoutResult]，
-                     * 长按时用它把**触摸坐标**换算成**字符下标** ——
-                     * 这是唯一可靠的方式：自己按字号估算位置會在换行、标点避头尾
-                     * 等情况下偏掉，用户长按到的词和实际选中的词对不上。
+                     * ## 为什么用 BasicTextField 而不是 Text + SelectionContainer
                      *
-                     * 下标要再加上 `pageStart` 才是**章内偏移**（书签与笔记存的坐标系）。
+                     * 前一版是在 `SelectionContainer { Text(onLongPress…) }` 上挂手势，
+                     * 真机上**长按毫无反应**。原因是 SelectionContainer 自己就抢占了
+                     * 长按手势 —— 它的职责正是「长按选词」，于是挂在 Text 上的
+                     * `detectTapGestures` 收不到事件。靠叠加手势去和它抢是行不通的。
+                     *
+                     * `BasicTextField(readOnly = true)` 是阅读类应用的标准做法：
+                     * 它有**原生**的长按选词、拖拽手柄、双击选词，全部由系统实现，
+                     * 不需要我们重造。选中区间通过 onValueChange 的 TextFieldValue
+                     * 拿到，再换算成章内偏移交给 ViewModel。
+                     *
+                     * 关掉系统自带的复制/全选浮层：应用已经有自己的标注操作条
+                     * （划线 / 写笔记 / 复制 / 查词），两个浮层同时弹出会互相遮挡。
                      */
-                    var bodyLayout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
-                    Text(
-                        text = buildPageText(text, settings, highlights, pageStart),
-                        style = bodyTextStyle(settings),
-                        color = palette.text,
-                        onTextLayout = { bodyLayout = it },
-                        modifier = Modifier.pointerInput(text, pageStart, settings.fontSizeSp) {
-                            detectTapGestures(
-                                onLongPress = { pos ->
-                                    val layout = bodyLayout ?: return@detectTapGestures
-                                    val offset = layout.getOffsetForPosition(pos)
-                                    // 用真实映射换算回章内偏移 ——
-                                    // 直接 pageStart + offset 会因为缩进与段落空行而漂移
-                                    val chapterOffset =
-                                        com.moyu.reader.reader.PageTextComposer
-                                            .renderOffsetToChapterOffset(
-                                                pageText = text,
-                                                pageStart = pageStart,
-                                                indentEm = settings.indentEm,
-                                                paragraphSpacingMultiplier =
-                                                settings.paragraphSpacingMultiplier,
-                                                renderOffset = offset,
-                                            )
-                                    if (chapterOffset != null) {
-                                        viewModel.selectWordAt(chapterOffset)
-                                    }
-                                },
+                    /**
+                     * 选区由自己在 remember 里保持。
+                     *
+                     * 关键点：**不能**每次重组都把 selection 重建成 Zero ——
+                     * 那会在用户拖手柄的过程中把选区重置掉。
+                     * 只在翻页（text / pageStart 变化）时清空。
+                     */
+                    var fieldValue by remember(text, pageStart) {
+                        mutableStateOf(
+                            androidx.compose.ui.text.input.TextFieldValue(
+                                annotatedString = buildPageText(text, settings, highlights, pageStart),
+                                selection = androidx.compose.ui.text.TextRange.Zero,
                             )
+                        )
+                    }
+
+                    // 排版设置变化时要更新渲染文本，但保留当前选区
+                    val rendered = buildPageText(text, settings, highlights, pageStart)
+                    if (rendered != fieldValue.annotatedString) {
+                        fieldValue = fieldValue.copy(annotatedString = rendered)
+                    }
+
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = fieldValue,
+                        onValueChange = { new ->
+                            fieldValue = new
+                            // readOnly 下文本不会变，onValueChange 只在选区变化时触发
+                            val sel = new.selection
+                            if (!sel.collapsed) {
+                                val from = com.moyu.reader.reader.PageTextComposer
+                                    .renderOffsetToChapterOffset(
+                                        pageText = text,
+                                        pageStart = pageStart,
+                                        indentEm = settings.indentEm,
+                                        paragraphSpacingMultiplier =
+                                        settings.paragraphSpacingMultiplier,
+                                        renderOffset = sel.min,
+                                    )
+                                val to = com.moyu.reader.reader.PageTextComposer
+                                    .renderOffsetToChapterOffset(
+                                        pageText = text,
+                                        pageStart = pageStart,
+                                        indentEm = settings.indentEm,
+                                        paragraphSpacingMultiplier =
+                                        settings.paragraphSpacingMultiplier,
+                                        renderOffset = sel.max,
+                                    )
+                                if (from != null && to != null && to > from) {
+                                    viewModel.setSelectionRange(from, to)
+                                }
+                            }
                         },
+                        readOnly = true,
+                        textStyle = bodyTextStyle(settings).copy(color = palette.text),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                            androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
             }
@@ -1079,8 +1069,7 @@ private fun ReaderPage(
                 }
             }
         }
-    }
-}
+        }
 
 /** 地脚高度。两页必须一致，否则翻页时地脚会跳。 */
 private val FOOTER_HEIGHT = 26.dp

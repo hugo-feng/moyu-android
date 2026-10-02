@@ -1,4 +1,4 @@
-package com.moyu.reader.ui.screens
+﻿package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,10 +27,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Upload
-import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -56,16 +54,13 @@ import com.moyu.reader.data.model.Book
 import com.moyu.reader.data.model.BookFormat
 import com.moyu.reader.data.prefs.ShelfLayout
 import com.moyu.reader.ui.MoyuViewModelFactory
-import com.moyu.reader.ui.ShelfFilter
 import com.moyu.reader.ui.ShelfGroup
 import com.moyu.reader.ui.ShelfStats
 import com.moyu.reader.ui.ShelfViewModel
 import com.moyu.reader.ui.components.EmptyState
 import com.moyu.reader.ui.components.IconAction
-import com.moyu.reader.ui.components.MoyuChip
 import com.moyu.reader.ui.components.MoyuPrimaryButton
 import com.moyu.reader.ui.components.MoyuTextButton
-import com.moyu.reader.ui.components.SegmentedControl
 import com.moyu.reader.ui.components.ThinProgressBar
 import com.moyu.reader.ui.safeBottom
 import com.moyu.reader.ui.safeTop
@@ -117,7 +112,9 @@ fun ShelfScreen(
     val shelfCount by viewModel.shelfCount.collectAsStateWithLifecycle()
     val continueItem by viewModel.continueReading.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
-    val filter by viewModel.filter.collectAsStateWithLifecycle()
+    // 筛选标签已移除：分组改用卡片钻入（见 groupCards / openGroup）。
+    // 「全部 / 在读 / 未读 / 已读完」那排标签按用户要求删掉了 ——
+    // 原话是「书架只应该显示书」。
     val groupCards by viewModel.groupCards.collectAsStateWithLifecycle()
     val openGroupName by viewModel.openedGroupName.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -763,78 +760,6 @@ private fun parseHexColor(hex: String): Color? = try {
     null
 }
 
-/** 筛选与分组。 */@Composable
-private fun ShelfFilters(
-    current: ShelfFilter,
-    groups: List<Pair<String, String>>,
-    onSelect: (ShelfFilter) -> Unit,
-    onCreateGroup: (String) -> Unit,
-) {
-    var creating by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MoyuChip("全部", current == ShelfFilter.All, onClick = { onSelect(ShelfFilter.All) })
-            MoyuChip("在读", current == ShelfFilter.Reading, onClick = { onSelect(ShelfFilter.Reading) })
-            MoyuChip("未读", current == ShelfFilter.Unread, onClick = { onSelect(ShelfFilter.Unread) })
-            MoyuChip("已读完", current == ShelfFilter.Finished, onClick = { onSelect(ShelfFilter.Finished) })
-        }
-
-        if (groups.isNotEmpty() || creating) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                groups.forEach { (id, name) ->
-                    MoyuChip(name, current == ShelfFilter.Group(id), onClick = { onSelect(ShelfFilter.Group(id)) })
-                }
-            }
-        }
-
-        if (creating) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                androidx.compose.material3.OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    placeholder = { Text("分组名称") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                MoyuTextButton(
-                    text = "创建",
-                    onClick = {
-                        onCreateGroup(newName)
-                        newName = ""
-                        creating = false
-                    },
-                    enabled = newName.isNotBlank(),
-                )
-                MoyuTextButton(text = "取消", onClick = { creating = false; newName = "" })
-            }
-        } else {
-            Row(modifier = Modifier.padding(top = 8.dp)) {
-                MoyuTextButton(
-                    text = "新建分组",
-                    icon = Icons.Filled.Add,
-                    onClick = { creating = true },
-                )
-            }
-        }
-    }
-}
 
 /**
  * 网格布局下的书籍卡片。

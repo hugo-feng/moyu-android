@@ -1,4 +1,4 @@
-package com.moyu.reader.data.prefs
+﻿package com.moyu.reader.data.prefs
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -15,8 +15,23 @@ import kotlinx.coroutines.flow.map
 /** 阅读主题。 */
 enum class ThemeId { PAPER, SEPIA, GREEN, NIGHT, INK }
 
-/** 翻页方式。 */
-enum class PageMode { SIMULATION, SLIDE, COVER, SCROLL, NONE }
+/**
+ * 翻页方式。
+ *
+ * 原先有五种（仿真 / 平移 / 覆盖 / 滚动 / 无），现只保留三种。
+ *
+ * **为什么删掉仿真与平移**：这两种在真机上会出现「前一页的文字与后一页
+ * 的文字重叠」—— 它们是两层页面同时绘制、各自做旋转或位移，
+ * 正文笔画在中间帧会互相穿插。用户明确要求删除仿真，
+ * 并去掉平移的动画效果。
+ *
+ * 覆盖（COVER）没有这个问题：旧页**完全不动**，新页从右侧盖上来。
+ * 无（NONE）则是直接切换，连过渡都没有。
+ *
+ * 被删掉的枚举名若还留在用户的 DataStore 里，会被读成默认值
+ * （见 [enumOrDefault]），不会崩。
+ */
+enum class PageMode { COVER, SCROLL, NONE }
 
 /** 字体系列。 */
 enum class FontFamilyId { SERIF, SANS, KAI, SONG, HEI }
@@ -37,7 +52,7 @@ enum class ShelfLayout { GRID, LIST }
  */
 data class ReaderSettings(
     val theme: ThemeId = ThemeId.PAPER,
-    val pageMode: PageMode = PageMode.SIMULATION,
+    val pageMode: PageMode = PageMode.COVER,
     // —— 排版 ——
     val fontSizeSp: Int = 19,
     val lineHeightMultiplier: Float = 1.7f,
@@ -134,7 +149,7 @@ class SettingsStore(private val context: Context) {
     private fun Preferences.toSettings(): ReaderSettings {
         return ReaderSettings(
             theme = enumOrDefault(this[Keys.theme], ThemeId.PAPER),
-            pageMode = enumOrDefault(this[Keys.pageMode], PageMode.SIMULATION),
+            pageMode = enumOrDefault(this[Keys.pageMode], PageMode.COVER),
             fontSizeSp = this[Keys.fontSize] ?: 19,
             lineHeightMultiplier = this[Keys.lineHeight] ?: 1.7f,
             paragraphSpacingMultiplier = this[Keys.paragraphSpacing] ?: 0.8f,

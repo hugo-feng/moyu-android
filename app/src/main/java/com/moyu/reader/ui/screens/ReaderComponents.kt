@@ -92,8 +92,12 @@ fun ReaderTopBar(
     bookTitle: String,
     chapterTitle: String,
     speaking: Boolean,
+    /** 当前页是否已有书签，决定右上角书签图标是镂空还是填充。 */
+    bookmarked: Boolean,
     onBack: () -> Unit,
     onSpeak: () -> Unit,
+    onSearch: () -> Unit,
+    onToggleBookmark: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
@@ -128,6 +132,22 @@ fun ReaderTopBar(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+
+        /**
+         * 右上角依次是：搜索、书签、朗读。
+         *
+         * 搜索与书签原先在底部工具栏里，用户要求把它们移到顶栏右边 ——
+         * 底栏因此瘦了下来（见 ReaderBottomBar 的注释）。
+         *
+         * 书签用**两个不同图标**（BookmarkBorder ↔ Bookmark）而不是同一个换色：
+         * 只换颜色在浅色主题下对比太弱，看不出状态变化。
+         */
+        IconAction(Icons.Filled.Search, "搜索全书内容", onSearch)
+        IconAction(
+            icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+            contentDescription = if (bookmarked) "取消本页书签" else "为本页加书签",
+            onClick = onToggleBookmark,
+        )
         IconAction(
             icon = if (speaking) Icons.Filled.Pause else Icons.AutoMirrored.Filled.VolumeUp,
             contentDescription = if (speaking) "停止朗读" else "开始朗读",
@@ -145,17 +165,9 @@ fun ReaderBottomBar(
     chapterIndex: Int,
     chapterCount: Int,
     onChapterSeek: (Int) -> Unit,
-    autoReading: Boolean,
-    isNight: Boolean,
-    /** 当前页是否已有书签，决定书签按钮是镂空还是填充。 */
-    bookmarked: Boolean,
     onToc: () -> Unit,
     onNotes: () -> Unit,
-    onToggleBookmark: () -> Unit,
-    onToggleNight: () -> Unit,
-    onToggleAuto: () -> Unit,
-    onSearch: () -> Unit,
-    onTypography: () -> Unit,
+    onSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
@@ -202,34 +214,19 @@ fun ReaderBottomBar(
         ) {
             ReaderToolButton("目录", Icons.AutoMirrored.Filled.List, onToc)
             ReaderToolButton("笔记", Icons.Filled.Edit, onNotes)
+
             /**
-             * 书签：已加时图标从镂空变填充。
+             * 「设置」进入阅读设置面板。
              *
-             * 放工具栏的**操作位**（目录/笔记之后）而不是顶部栏：
-             * 顶部栏右侧已被朗读占用，且顶部栏承担返回/书名这类导航职责；
-             * 书签是**页内操作**，与目录/笔记/搜索同属一组，放这里找得到。
+             * 原先这里叫「排版」，点开只是字号行距那一组。用户要求改名成设置 ——
+             * 因为下面这些已经全部并进同一个面板：排版、夜间、自动阅读、
+             * 翻页方式、朗读。名字叫「排版」会让人以为夜间与自动阅读不在里面，
+             * 反而找不到。
              *
-             * 切换的是**两个不同图标**（BookmarkBorder ↔ Bookmark）而不是
-             * 同一个图标换 tint —— 只换颜色在浅色主题下对比太弱，
-             * 用户看不出状态变化（这正是「镂空变填充」要表达的意思）。
+             * 这是**阅读器内部**的设置面板，与底栏那个全局设置页是两回事：
+             * 读书时最常调的是字号/主题/自动阅读，跳出去再回来会打断阅读。
              */
-            ReaderToolButton(
-                label = if (bookmarked) "已书签" else "书签",
-                icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
-                onClick = onToggleBookmark,
-            )
-            ReaderToolButton(
-                if (isNight) "日间" else "夜间",
-                if (isNight) Icons.Filled.LightMode else Icons.Filled.DarkMode,
-                onToggleNight,
-            )
-            ReaderToolButton(
-                if (autoReading) "暂停" else "自动",
-                if (autoReading) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                onToggleAuto,
-            )
-            ReaderToolButton("搜索", Icons.Filled.Search, onSearch)
-            ReaderToolButton("排版", Icons.Filled.FormatSize, onTypography)
+            ReaderToolButton("设置", Icons.Filled.FormatSize, onSettings)
         }
     }
 }
@@ -429,9 +426,18 @@ fun TocSheet(
 }
 
 // ============================================================
-// 排版面板
+// 阅读设置面板
 // ============================================================
 
+/**
+ * 阅读设置面板（底栏那个「设置」按钮打开的就是它）。
+ *
+ * 原先叫「排版」，只放字号行距；现在夜间与自动阅读也并了进来
+ * （它们原先占着底栏的两个按钮位），所以整体改名为「设置」更准确。
+ *
+ * 与底栏那个全局设置页的区别：这里是**读书时随手要调的东西**。
+ * 跳出去再回来会打断阅读，所以留在阅读器内部。
+ */
 @Composable
 fun TypographySheet(
     viewModel: ReaderViewModel,
@@ -439,6 +445,8 @@ fun TypographySheet(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val palette = moyuPalette()
+    val autoReading by viewModel.autoReading.collectAsStateWithLifecycle()
+    val density = androidx.compose.ui.platform.LocalDensity.current
 
     ReaderSheetContainer(onDismiss = onDismiss) {
         SheetHeader(title = "排版", onClose = onDismiss)
@@ -534,11 +542,12 @@ fun TypographySheet(
             SheetGroupTitle("翻页方式")
             Row(modifier = Modifier.padding(horizontal = 16.dp)) {
                 SegmentedControl(
+                    // 仿真与平移已删除（真机上会让前后页文字重叠），
+                    // 详见 PageMode 的注释。
                     options = listOf(
-                        PageMode.SIMULATION to "仿真",
-                        PageMode.SLIDE to "平移",
                         PageMode.COVER to "覆盖",
                         PageMode.SCROLL to "滚动",
+                        PageMode.NONE to "无动画",
                     ),
                     selected = settings.pageMode,
                     onSelect = { viewModel.setPageMode(it) },
@@ -577,7 +586,29 @@ fun TypographySheet(
             // 系统下拉栏已经能调，不必重复提供。
 
             // —— 自动阅读节奏 ——
+            //
+            // 「自动阅读」的**开关**也从底栏移到了这里（原先底栏有一个
+            // 「自动/暂停」按钮）。用户要求把自动阅读放进设置 ——
+            // 它是一次性开启后就让应用自己翻页的功能，不需要常驻一个按钮；
+            // 常驻反而容易被误触，一碰就开始自动翻页。
             SheetGroupTitle("自动阅读")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (autoReading) "正在自动阅读" else "自动阅读已关闭",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.text,
+                    modifier = Modifier.weight(1f),
+                )
+                MoyuTextButton(
+                    text = if (autoReading) "暂停" else "开始",
+                    onClick = { viewModel.toggleAutoRead(density) },
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

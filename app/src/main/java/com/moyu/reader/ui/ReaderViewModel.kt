@@ -611,6 +611,30 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
     private fun isWordChar(c: Char): Boolean =
         c.isLetterOrDigit() && c.code < 0x2E80 || c == '_' || c == '\'' || c == '-'
 
+    /**
+     * 直接按**章内区间**设置选区。
+     *
+     * 给 `BasicTextField` 的选区变化用：系统已经帮我们算好了选中的是哪些字
+     * （长按选词、拖手柄扩展都由它实现），我们只需要把那个区间换算成
+     * 章内偏移记下来。
+     *
+     * 与 [selectWordAt] 的区别：[selectWordAt] 是「给我一个点，我自己扩成一个词」，
+     * 这里则是「区间已经确定了，照收」。前者用于自己判定的场景，
+     * 后者用于系统给了准确区间、不该再自作聪明去扩词的场景 ——
+     * 用户拖手柄把选区缩到一个字，再被扩回整个词会很恼人。
+     */
+    fun setSelectionRange(start: Int, end: Int) {
+        val chapter = _currentChapter.value ?: return
+        val content = chapter.content
+        val s = start.coerceIn(0, content.length)
+        val e = end.coerceIn(0, content.length)
+        if (e <= s) return
+
+        val text = content.substring(s, e)
+        if (text.isBlank()) return
+        _selection.value = TextSelection(s, e, text)
+    }
+
     fun clearSelection() {
         _selection.value = null
     }
