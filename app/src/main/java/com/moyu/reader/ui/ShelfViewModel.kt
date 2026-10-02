@@ -61,20 +61,46 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
         .stateIn(scope, SharingStarted.WhileSubscribed(5_000), com.moyu.reader.data.prefs.ReaderSettings())
 
     /**
-     * 当前筛选/排序下的书架条目。
+     * 当前页面是「书库」还是「书架」。
+     *
+     * 同一个 ViewModel 支撑两个页面：两者的列表形态、筛选、排序、
+     * 分组、单本操作完全一样，只有**数据源**与「加入/移出书架」这一个动作不同。
+     * 拆成两个 ViewModel 会把上面两百行逻辑抄一遍，之后必然漂移
+     * （一边改了排序另一边没改）。
+     *
+     * 由页面在 LaunchedEffect 里设置一次。默认 false = 书库 ——
+     * 那是用户进入应用后看到的第一个页面。
+     */
+    private val _libraryMode = MutableStateFlow(false)
+    val libraryMode: StateFlow<Boolean> = _libraryMode.asStateFlow()
+
+    fun setLibraryMode(library: Boolean) {
+        if (_libraryMode.value == library) return
+        _libraryMode.value = library
+        // 切页面时回到「全部」，否则从书架的「已读完」切到书库会莫名其妙地空着
+        _filter.value = ShelfFilter.All
+    }
+
+    /** 当前模式对应的数据源。 */
+    private val sourceItems =
+        combine(bookRepo.libraryItems, bookRepo.shelfItems, _libraryMode) { library, shelf, isLibrary ->
+            if (isLibrary) library else shelf
+        }
+
+    /**
+     * 当前筛选/排序下的条目。
      *
      * 筛选与排序在这里完成而不是在 Composable 里：
-     * 排序涉及 localeCompare 与进度比较，放在 UI 层会导致每次重组都重算一遍。
+     * 排序涉及 Collator 与进度比较，放在 UI 层会导致每次重组都重算一遍。
      */
     val items: StateFlow<List<ShelfItem>> =
-        combine(bookRepo.shelfItems, _filter, settingsStore.settings) { items, filter, prefs ->
-            val filtered = applyFilter(items, filter)
-            applySort(filtered, prefs.shelfSort)
+        combine(sourceItems, _filter, settingsStore.settings) { items, filter, prefs ->
+            applySort(applyFilter(items, filter), prefs.shelfSort)
         }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** 顶部统计：书籍数、已读完、本周阅读时长。 */
+    /** 顶部统计：书籍数、已读完、本周阅读时长。跨模式共用同一份统计。 */
     val stats: StateFlow<ShelfStats> =
-        combine(bookRepo.shelfItems, container.statsRepository.sessions) { list, sessions ->
+        combine(bookRepo.libraryItems, container.statsRepository.sessions) { list, sessions ->
             val weekAgo = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
             val weekSeconds = sessions
                 .filter { it.startedAt >= weekAgo }
@@ -86,15 +112,31 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
             )
         }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), ShelfStats(0, 0, 0))
 
+    /** 书架里的书数量（底部标签用它显示角标，也用于空状态文案）。 */
+    val shelfCount: StateFlow<Int> =
+        bookRepo.shelfCount.stateIn(scope, SharingStarted.WhileSubscribed(5_000), 0)
+
     /** 「继续阅读」：最近在读且未读完的那本。 */
     val continueReading: StateFlow<ShelfItem?> =
-        bookRepo.shelfItems.combine(settingsStore.settings) { list, _ -> list }
-            .let { flow ->
-                flow.combine(kotlinx.coroutines.flow.flowOf(Unit)) { list, _ ->
-                    list.firstOrNull { !it.finished && !it.unread } ?: list.firstOrNull { !it.finished }
-                }
+        bookRepo.libraryItems
+            .combine(kotlinx.coroutines.flow.flowOf(Unit)) { list, _ ->
+                list.firstOrNull { !it.finished && !it.unread } ?: list.firstOrNull { !it.finished }
             }
             .stateIn(scope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * 加入书架 / 移出书架。
+     *
+     * 书库里对每本书显示「加入书架」，已加入的显示「已在书架」并可移出；
+     * 书架里则显示「移出书架」。文案由界面按 [ShelfItem.book] 的 inShelf 决定。
+     */
+    fun toggleInShelf(book: Book) {
+        scope.launch {
+            val next = !book.inShelf
+            bookRepo.setInShelf(book.id, next)
+            _message.value = if (next) "已加入书架：${book.title}" else "已移出书架：${book.title}"
+        }
+    }
 
     // ============================================================
     // 筛选与排序
@@ -222,7 +264,9 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
     fun delete(book: Book) {
         scope.launch {
             bookRepo.deleteBook(book.id)
-            _message.value = "已移出书架：${book.title}"
+            // 「删除」是从书库彻底移除（连文件记录一起），
+            // 与「移出书架」是两件事 —— 后者只把书放回书库。
+            _message.value = "已删除：${book.title}"
         }
     }
 

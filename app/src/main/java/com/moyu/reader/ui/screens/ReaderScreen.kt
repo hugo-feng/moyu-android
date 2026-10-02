@@ -126,6 +126,8 @@ fun ReaderScreen(
     val highlights by viewModel.chapterHighlights.collectAsStateWithLifecycle()
     // 翻页动画的触发令牌（每次翻页自增）。不订阅它就等于关掉了所有翻页动效。
     val flipToken by viewModel.flipToken.collectAsStateWithLifecycle()
+    // 当前页的书签：决定工具栏上那个按钮是镂空还是填充
+    val currentPageBookmark by viewModel.currentPageBookmark.collectAsStateWithLifecycle()
 
     var chromeVisible by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(ReaderSheet.NONE) }
@@ -425,8 +427,10 @@ fun ReaderScreen(
                 onChapterSeek = { index -> viewModel.jumpToChapter(index, density) },
                 autoReading = autoReading,
                 isNight = settings.theme == ThemeId.NIGHT,
+                bookmarked = currentPageBookmark != null,
                 onToc = { sheet = if (sheet == ReaderSheet.TOC) ReaderSheet.NONE else ReaderSheet.TOC },
                 onNotes = { sheet = if (sheet == ReaderSheet.NOTES) ReaderSheet.NONE else ReaderSheet.NOTES },
+                onToggleBookmark = { viewModel.toggleBookmarkAtPage() },
                 onToggleNight = { viewModel.quickToggleNight() },
                 onToggleAuto = { viewModel.toggleAutoRead(density) },
                 onSearch = { onOpenSearch(bookId) },

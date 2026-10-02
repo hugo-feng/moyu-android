@@ -30,6 +30,13 @@ data class Book(
     val status: ReadingStatus,
     val addedAt: Long,
     val lastReadAt: Long,
+    /**
+     * 是否已加入书架。
+     *
+     * 导入的书全部落在**书库**；只有用户主动「加入书架」后才会出现在书架栏。
+     * 默认 false —— 新导入的书不该自动占据书架。
+     */
+    val inShelf: Boolean = false,
 )
 
 /**

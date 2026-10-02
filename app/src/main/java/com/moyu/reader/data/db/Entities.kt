@@ -55,6 +55,22 @@ data class BookEntity(
     @ColumnInfo(name = "source_modified") val sourceModified: Long = 0L,
     @ColumnInfo(name = "added_at") val addedAt: Long,
     @ColumnInfo(name = "last_read_at") val lastReadAt: Long,
+    /**
+     * 是否已「加入书架」。
+     *
+     * ## 为什么需要两个位置
+     *
+     * 导入的书全部进**书库**（所有本机书籍的总入口），
+     * 「书架」则只放用户主动收藏的书 —— 与 Yellow 的结构一致。
+     *
+     * 两者分开的用处在于：书库会随导入不断变长（试读的、临时看的都在里面），
+     * 而书架是用户自己筛选过的、想长期读的那几本。
+     * 只有一个列表时，这两类书混在一起，找书越来越难。
+     *
+     * 默认 false：新导入的书先落在书库，由用户决定要不要加入书架。
+     */
+    @ColumnInfo(name = "in_shelf", defaultValue = "0")
+    val inShelf: Boolean = false,
 )
 
 /**

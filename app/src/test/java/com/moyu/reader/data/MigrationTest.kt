@@ -5,14 +5,17 @@ import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import com.moyu.reader.data.db.MIGRATION_1_2
+import com.moyu.reader.data.db.MIGRATION_2_3
 import com.moyu.reader.data.db.MoyuDatabase
 import java.io.File
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -133,7 +136,10 @@ class MigrationTest {
 
         val db = Room.databaseBuilder(context, MoyuDatabase::class.java, dbName)
             .allowMainThreadQueries()
-            .addMigrations(MIGRATION_1_2)
+            // 两条迁移都要登记：目标 schema 是 v3，Room 需要一条
+            // 从 v1 一路走到 v3 的完整路径。只给 1→2 会直接报
+            // 「A migration from 1 to 3 was required but not found」。
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
 
         try {
@@ -153,6 +159,46 @@ class MigrationTest {
             // 迁移补上的外键必须真的生效：删书要连位置一起删
             db.bookDao().deleteById("b1")
             assertNull("迁移后外键应生效：删书级联删除阅读位置", db.readingPositionDao().find("b1"))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `migration 2 to 3 adds in_shelf and keeps existing books`() = runBlocking {
+        createV1Database()
+
+        // 从 v1 一路迁到 v3：同时验证 1→2 与 2→3 能串联。
+        // 真实用户的升级路径就是这样，只测单步会漏掉「链式中断」。
+        val db = Room.databaseBuilder(context, MoyuDatabase::class.java, dbName)
+            .allowMainThreadQueries()
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .build()
+
+        try {
+            // v1 里插过一本书，迁移后必须还在
+            val books = db.bookDao().getAll()
+            assertTrue("迁移后书不应丢失", books.isNotEmpty())
+
+            /**
+             * `in_shelf` 的默认值必须是 **false**（不在书架）。
+             *
+             * 这是刻意的：老库里的书如果默认 true，迁移后「书架」里仍是全部书，
+             * 用户会觉得新功能没生效；默认 false 则状态符合「加入了才在书架里」
+             * 这个约定，书都在书库，用户自己整理。
+             */
+            assertTrue(
+                "迁移后老书应默认不在书架（in_shelf = false）",
+                books.all { !it.inShelf },
+            )
+
+            // 加入书架后应当只出现在书架查询里
+            val id = books.first().id
+            db.bookDao().setInShelf(id, true)
+            assertEquals("书架里应有 1 本", 1, db.bookDao().observeShelfCount().first())
+
+            db.bookDao().setInShelf(id, false)
+            assertEquals("移出后书架应为空", 0, db.bookDao().observeShelfCount().first())
         } finally {
             db.close()
         }

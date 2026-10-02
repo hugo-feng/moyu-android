@@ -633,26 +633,65 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         }
     }
 
-    fun addBookmarkAtPageStart() {
+    /**
+     * 当前页的书签（若有）。
+     *
+     * 判定标准是「书签落在本页的字符区间内」，而不是「偏移等于页首」——
+     * 用户可能在页中间通过选中文字加书签，那也属于这一页，
+     * 按钮应当显示为已填充。用精确相等会导致按钮状态与视觉不符。
+     */
+    val currentPageBookmark: StateFlow<Bookmark?> =
+        kotlinx.coroutines.flow.combine(_bookmarks, _pages, _pageIndex, _chapterIndex) {
+                marks, pages, pageIndex, chapterIndex ->
+            val page = pages.getOrNull(pageIndex) ?: return@combine null
+            marks.firstOrNull { mark ->
+                mark.chapterIndex == chapterIndex &&
+                    mark.chapterOffset >= page.start && mark.chapterOffset < page.end
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * 切换当前页的书签：已加则取消，未加则添加。
+     *
+     * 按钮的图标随之在「镂空 ↔ 填充」之间变化，因此必须支持取消 ——
+     * 只加不删的话，用户点第二次会得到一个重复书签，而按钮看起来毫无反应。
+     */
+    fun toggleBookmarkAtPage() {
         val bookId = _book.value?.id ?: return
         val chapter = _currentChapter.value ?: return
         val page = _pages.value.getOrNull(_pageIndex.value) ?: return
-        val excerpt = chapter.content.substring(
-            page.start,
-            (page.start + 60).coerceAtMost(page.end),
-        )
+        val chapterIndex = _chapterIndex.value
+
+        val existing = _bookmarks.value.firstOrNull { mark ->
+            mark.chapterIndex == chapterIndex &&
+                mark.chapterOffset >= page.start && mark.chapterOffset < page.end
+        }
+
         scope.launch {
-            noteRepo.addBookmark(
-                bookId = bookId,
-                chapterIndex = _chapterIndex.value,
-                chapterOffset = page.start,
-                globalOffset = chapter.start + page.start,
-                excerpt = excerpt,
-            )
-            reloadNotes(bookId)
-            _message.value = "已在本页添加书签"
+            if (existing != null) {
+                noteRepo.removeBookmark(existing.id)
+                reloadNotes(bookId)
+                _message.value = "已取消本页书签"
+            } else {
+                val excerpt = chapter.content.substring(
+                    page.start,
+                    (page.start + 60).coerceAtMost(page.end),
+                )
+                noteRepo.addBookmark(
+                    bookId = bookId,
+                    chapterIndex = chapterIndex,
+                    chapterOffset = page.start,
+                    globalOffset = chapter.start + page.start,
+                    excerpt = excerpt,
+                )
+                reloadNotes(bookId)
+                _message.value = "已在本页添加书签"
+            }
         }
     }
+
+    /** 保留旧名，供选中文字后加书签的路径使用。 */
+    fun addBookmarkAtPageStart() = toggleBookmarkAtPage()
 
     fun addHighlightFromSelection(note: String, color: String) {
         val bookId = _book.value?.id ?: return

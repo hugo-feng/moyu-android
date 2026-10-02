@@ -50,3 +50,31 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         db.execSQL("ALTER TABLE `reading_positions_new` RENAME TO `reading_positions`")
     }
 }
+
+/**
+ * 版本 2 → 3：books 增加 `in_shelf`（是否已加入书架）。
+ *
+ * 引入「书库 / 书架」两分之后，导入的书先落在书库，
+ * 只有用户主动加入才进书架。老数据没有这个字段，
+ * 因此迁移时给一个默认值 —— 而默认值选什么是**有讲究**的。
+ *
+ * ## 为什么老书默认「不在书架」
+ *
+ * 直觉上可能想给 true（老用户的书本来就都在书架上），但那样
+ * 迁移之后「书架」里仍然是全部书，用户看到的是一个没有任何变化的应用 ——
+ * 新功能等于没生效，还得自己一本本移出去。
+ *
+ * 反过来默认 false，用户会看到书架空了、书都在书库里。
+ * 这虽然也需要一次整理，但至少**状态是符合预期的**：
+ * 加入了才在书架里。
+ *
+ * 取舍的依据是「哪种误解代价更小」：书架空着只是多一步操作；
+ * 而以为功能没生效会让人反复找、甚至以为数据丢了。
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `in_shelf` INTEGER NOT NULL DEFAULT 0",
+        )
+    }
+}

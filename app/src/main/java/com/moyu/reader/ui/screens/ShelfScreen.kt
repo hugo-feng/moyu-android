@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
@@ -31,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,11 +84,34 @@ fun ShelfScreen(
     onOpenSearch: (String?) -> Unit,
     onOpenImport: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenNotes: () -> Unit,
+    /**
+     * 打开某本书的笔记页。
+     *
+     * 参数从「无」改成「bookId」：全局笔记标签已被阅读历史取代，
+     * 笔记改为**按书**查看。书架列表里每行的「笔记」按钮需要告诉
+     * 目标页面是哪本书，否则会打开一个空页面。
+     */
+    onOpenNotes: (String) -> Unit,
+    /**
+     * 当前页面是「书库」还是「书架」。
+     *
+     * 书库 = 全部导入的书；书架 = 用户主动加入的那些。
+     * 两者共用这一个 Composable：列表形态、筛选、排序、分组、
+     * 单本操作完全一致，唯一差别是标题与「加入/移出书架」那一个动作。
+     */
+    libraryMode: Boolean = false,
 ) {
     val viewModel: ShelfViewModel = viewModel(factory = factory)
+
+    // 由页面决定进入哪种模式。用 LaunchedEffect 而不是构造参数：
+    // ViewModel 是导航层级共享的，切换标签时它不会重建，
+    // 必须在进入页面时显式告知当前是哪一边。
+    LaunchedEffect(libraryMode) { viewModel.setLibraryMode(libraryMode) }
+    val onToggleShelf: (com.moyu.reader.data.model.Book) -> Unit = { viewModel.toggleInShelf(it) }
+
     val items by viewModel.items.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val shelfCount by viewModel.shelfCount.collectAsStateWithLifecycle()
     val continueItem by viewModel.continueReading.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     val filter by viewModel.filter.collectAsStateWithLifecycle()
@@ -110,6 +136,8 @@ fun ShelfScreen(
             ShelfHeader(
                 greeting = viewModel.greeting(),
                 stats = stats,
+                libraryMode = libraryMode,
+                shelfCount = shelfCount,
                 onOpenStats = onOpenStats,
             )
         }
@@ -210,10 +238,13 @@ fun ShelfScreen(
                         horizontalArrangement = Arrangement.spacedBy(gap),
                         verticalArrangement = Arrangement.spacedBy(18.dp),
                     ) {
+                        // 注意这里用 forEach 而不是 LazyListScope.items：
+                        // 网格分支里的局部变量 `items` 会遮蔽那个扩展函数。
                         items.forEach { item ->
                             BookGridCard(
                                 item = item,
                                 onClick = { onOpenBook(item.book.id) },
+                                onToggleShelf = { onToggleShelf(item.book) },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -225,7 +256,8 @@ fun ShelfScreen(
                 BookListRow(
                     item = item,
                     onClick = { onOpenBook(item.book.id) },
-                    onNotes = onOpenNotes,
+                    onNotes = { onOpenNotes(item.book.id) },
+                    onToggleShelf = { onToggleShelf(item.book) },
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 )
             }
@@ -238,6 +270,8 @@ fun ShelfScreen(
 private fun ShelfHeader(
     greeting: String,
     stats: ShelfStats,
+    libraryMode: Boolean,
+    shelfCount: Int,
     onOpenStats: () -> Unit,
 ) {
     val palette = moyuPalette()
@@ -256,10 +290,22 @@ private fun ShelfHeader(
             )
         }
         Text(
-            text = "我的书架",
+            text = if (libraryMode) "书库" else "书架",
             style = MaterialTheme.typography.headlineLarge,
             color = palette.text,
             modifier = Modifier.padding(top = 4.dp),
+        )
+        // 副标题说明两边的区别 —— 不写的话用户不知道书库与书架差在哪，
+        // 会以为「加入书架」是个没有作用的按钮。
+        Text(
+            text = if (libraryMode) {
+                "本机全部书籍（$shelfCount 本已在书架）"
+            } else {
+                "已加入书架的书"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary,
+            modifier = Modifier.padding(top = 2.dp),
         )
 
         Box(
@@ -491,6 +537,7 @@ private fun ShelfFilters(
 private fun BookGridCard(
     item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
+    onToggleShelf: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
@@ -523,6 +570,24 @@ private fun BookGridCard(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 2.dp, start = 1.dp, end = 1.dp),
         )
+        /**
+         * 「加入书架 / 移出书架」。
+         *
+         * 网格卡片的宽度有限，因此这里用**文字按钮**而不是图标 ——
+         * 图标看不出一本书当前在不在书架里，而这两个动作的差别恰恰是状态。
+         * 已加入时按钮文案变成「已在书架」，一眼能看出当前状态。
+         */
+        Text(
+            text = if (item.book.inShelf) "已在书架" else "加入书架",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (item.book.inShelf) palette.textSecondary else palette.primary,
+            maxLines = 1,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .clickable(onClick = onToggleShelf)
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -532,6 +597,7 @@ private fun BookListRow(
     item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
     onNotes: () -> Unit,
+    onToggleShelf: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
@@ -585,6 +651,11 @@ private fun BookListRow(
                 )
             }
         }
+        IconAction(
+            icon = if (item.book.inShelf) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+            contentDescription = if (item.book.inShelf) "移出书架" else "加入书架",
+            onClick = onToggleShelf,
+        )
         IconAction(
             icon = Icons.Filled.Search,
             contentDescription = "本书笔记",

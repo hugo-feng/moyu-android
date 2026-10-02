@@ -17,7 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.SettingsViewModel
 import com.moyu.reader.ui.safeDrawingBottomPadding
+import com.moyu.reader.ui.screens.HistoryScreen
 import com.moyu.reader.ui.screens.ImportScreen
 import com.moyu.reader.ui.screens.NotesScreen
 import com.moyu.reader.ui.screens.ReaderScreen
@@ -59,10 +61,23 @@ import com.moyu.reader.ui.theme.moyuPalette
  * 它会自行管理状态栏、返回手势与常亮，放在带底部栏的层级里会互相干扰。
  */
 object Routes {
+    /** 书库：本机**全部**导入的书。应用启动后的第一个页面。 */
+    const val LIBRARY = "library"
+
+    /** 书架：只放用户主动「加入书架」的书。 */
     const val SHELF = "shelf"
+
     const val STATS = "stats"
-    const val NOTES = "notes"
     const val SETTINGS = "settings"
+
+    /**
+     * 阅读历史。
+     *
+     * 它取代了原先的全局「笔记」标签。笔记没有消失 ——
+     * 仍在阅读器的「本书笔记」面板里（NotesViewModel.bookFilter = 本书），
+     * 那条路径不经过这里，因此删掉全局入口不影响它。
+     */
+    const val HISTORY = "history"
 
     /**
      * 阅读器路由带可选的跳转目标。
@@ -81,6 +96,11 @@ object Routes {
     fun reader(bookId: String, chapterIndex: Int = -1, chapterOffset: Int = 0) =
         "reader/$bookId?chapter=$chapterIndex&offset=$chapterOffset"
 
+    /** 单本书的笔记页。 */
+    const val BOOK_NOTES = "bookNotes/{bookId}"
+
+    fun bookNotes(bookId: String) = "bookNotes/$bookId"
+
     fun search(bookId: String? = null) =
         if (bookId == null) "search" else "search?bookId=$bookId"
 }
@@ -95,7 +115,13 @@ fun MoyuApp(
     val currentRoute = backStackEntry?.destination?.route
 
     // 阅读器是全屏页：它显示时底部导航必须隐藏，否则会与阅读器的底部工具栏重叠
-    val showBottomBar = currentRoute in setOf(Routes.SHELF, Routes.STATS, Routes.NOTES, Routes.SETTINGS)
+    val showBottomBar = currentRoute in setOf(
+        Routes.LIBRARY,
+        Routes.SHELF,
+        Routes.HISTORY,
+        Routes.STATS,
+        Routes.SETTINGS,
+    )
 
     Box(modifier = Modifier.fillMaxSize()) {
         /**
@@ -107,7 +133,8 @@ fun MoyuApp(
          */
         NavHost(
             navController = navController,
-            startDestination = Routes.SHELF,
+            // 启动落在**书库**：导入的书先在这里，用户挑出想读的加入书架
+            startDestination = Routes.LIBRARY,
             modifier = Modifier
                 .fillMaxSize()
                 .then(
@@ -118,14 +145,27 @@ fun MoyuApp(
                     },
                 ),
         ) {
-            composable(Routes.SHELF) {
+            composable(Routes.LIBRARY) {
                 ShelfScreen(
                     factory = factory,
+                    libraryMode = true,
                     onOpenBook = { bookId -> navController.navigate(Routes.reader(bookId)) },
                     onOpenSearch = { bookId -> navController.navigate(Routes.search(bookId)) },
                     onOpenImport = { navController.navigate(Routes.IMPORT) },
                     onOpenStats = { navController.navigate(Routes.STATS) },
-                    onOpenNotes = { navController.navigate(Routes.NOTES) },
+                    onOpenNotes = { bookId -> navController.navigate(Routes.bookNotes(bookId)) },
+                )
+            }
+
+            composable(Routes.SHELF) {
+                ShelfScreen(
+                    factory = factory,
+                    libraryMode = false,
+                    onOpenBook = { bookId -> navController.navigate(Routes.reader(bookId)) },
+                    onOpenSearch = { bookId -> navController.navigate(Routes.search(bookId)) },
+                    onOpenImport = { navController.navigate(Routes.IMPORT) },
+                    onOpenStats = { navController.navigate(Routes.STATS) },
+                    onOpenNotes = { bookId -> navController.navigate(Routes.bookNotes(bookId)) },
                 )
             }
 
@@ -137,13 +177,34 @@ fun MoyuApp(
                 )
             }
 
-            composable(Routes.NOTES) {
+            /**
+             * 阅读历史（底部标签第二格）。
+             *
+             * 取代了原先的全局「笔记」页。笔记仍然存在，见下方 BOOK_NOTES 路由 ——
+             * 它是**按书**查看的：从书架长按或阅读器工具栏进入。
+             * 这样不会出现「写得出笔记但找不到入口」的情况。
+             */
+            composable(Routes.HISTORY) {
+                HistoryScreen(
+                    factory = factory,
+                    onOpenBook = { bookId -> navController.navigate(Routes.reader(bookId)) },
+                )
+            }
+
+            /** 单本书的笔记（书签 + 划线）。从书架卡片菜单进入。 */
+            composable(
+                route = Routes.BOOK_NOTES,
+                arguments = listOf(
+                    androidx.navigation.navArgument("bookId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                ),
+            ) { entry ->
                 NotesScreen(
                     factory = factory,
-                    bookId = null,
+                    bookId = entry.arguments?.getString("bookId"),
                     onBack = { navController.popBackStack() },
                     onJump = { bookId, chapterIndex, chapterOffset ->
-                        // 带上命中位置，否则点了笔记只会回到上次读的地方
                         navController.navigate(Routes.reader(bookId, chapterIndex, chapterOffset))
                     },
                 )
@@ -187,7 +248,8 @@ fun MoyuApp(
                         navController.popBackStack()
                     },
                     onOpenSearch = { id -> navController.navigate(Routes.search(id)) },
-                    onOpenNotes = { id -> navController.navigate(Routes.NOTES) },
+                    // 阅读器工具栏的「笔记」按钮：跳到**本书**笔记页
+                    onOpenNotes = { id -> navController.navigate(Routes.bookNotes(id)) },
                 )
             }
 
@@ -244,9 +306,10 @@ private fun MoyuBottomBar(
 ) {
     val palette = moyuPalette()
     val items = listOf(
-        Triple(Routes.SHELF, "书架", Icons.AutoMirrored.Filled.MenuBook),
+        Triple(Routes.LIBRARY, "书库", Icons.AutoMirrored.Filled.MenuBook),
+        Triple(Routes.SHELF, "书架", Icons.Filled.Bookmark),
+        Triple(Routes.HISTORY, "历史", Icons.Filled.History),
         Triple(Routes.STATS, "统计", Icons.Filled.BarChart),
-        Triple(Routes.NOTES, "笔记", Icons.Filled.EditNote),
         Triple(Routes.SETTINGS, "设置", Icons.Filled.Settings),
     )
 

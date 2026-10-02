@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
@@ -146,8 +147,11 @@ fun ReaderBottomBar(
     onChapterSeek: (Int) -> Unit,
     autoReading: Boolean,
     isNight: Boolean,
+    /** 当前页是否已有书签，决定书签按钮是镂空还是填充。 */
+    bookmarked: Boolean,
     onToc: () -> Unit,
     onNotes: () -> Unit,
+    onToggleBookmark: () -> Unit,
     onToggleNight: () -> Unit,
     onToggleAuto: () -> Unit,
     onSearch: () -> Unit,
@@ -198,6 +202,22 @@ fun ReaderBottomBar(
         ) {
             ReaderToolButton("目录", Icons.AutoMirrored.Filled.List, onToc)
             ReaderToolButton("笔记", Icons.Filled.Edit, onNotes)
+            /**
+             * 书签：已加时图标从镂空变填充。
+             *
+             * 放工具栏的**操作位**（目录/笔记之后）而不是顶部栏：
+             * 顶部栏右侧已被朗读占用，且顶部栏承担返回/书名这类导航职责；
+             * 书签是**页内操作**，与目录/笔记/搜索同属一组，放这里找得到。
+             *
+             * 切换的是**两个不同图标**（BookmarkBorder ↔ Bookmark）而不是
+             * 同一个图标换 tint —— 只换颜色在浅色主题下对比太弱，
+             * 用户看不出状态变化（这正是「镂空变填充」要表达的意思）。
+             */
+            ReaderToolButton(
+                label = if (bookmarked) "已书签" else "书签",
+                icon = if (bookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                onClick = onToggleBookmark,
+            )
             ReaderToolButton(
                 if (isNight) "日间" else "夜间",
                 if (isNight) Icons.Filled.LightMode else Icons.Filled.DarkMode,

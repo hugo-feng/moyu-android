@@ -31,10 +31,28 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
 
+    <!--
+      显式关闭「预测式返回」（Android 13+，targetSdk ≥ 33 时系统默认开启）。
+
+      用户反馈：「从屏幕边缘往中间滑动做返回手势，还没松手就已经返回了」。
+      这正是预测式返回的行为：手势进行中系统就接管并播放返回预览，
+      看起来像提前执行了。
+
+      预测式返回的价值在于**跨页面共享元素的返回动画**（把列表项放大成
+      详情页、返回时缩回去）。本应用是单 Activity + Compose 导航，
+      没有任何跨 Activity 的返回动画，开启它只有副作用、没有收益。
+
+      关闭后恢复为「手势完成后才执行返回」的传统行为，与用户预期一致。
+      这是官方属性（API 33 引入），低版本会被清单合并忽略。
+
+      注意：属性写在 <application> 上，但注释**不能**放在标签的属性之间 ——
+      XML 不允许属性之间插注释，放在那里会导致清单解析失败（实测踩过）。
+    -->
     <application
         android:name=".MoyuApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="false"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

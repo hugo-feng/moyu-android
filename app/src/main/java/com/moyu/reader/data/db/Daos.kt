@@ -24,6 +24,23 @@ interface BookDao {
     @Query("SELECT * FROM books ORDER BY last_read_at DESC")
     fun observeAll(): Flow<List<BookEntity>>
 
+    /**
+     * 只观察**已加入书架**的书。
+     *
+     * 书架栏用它，书库栏用 [observeAll]。两个 Flow 分开写而不是在内存里 filter：
+     * 书架通常只有几本到几十本，让 SQLite 用索引直接筛出来比每次
+     * 拉全部书再过滤更省，而且书库涨到几百本时差别会很明显。
+     */
+    @Query("SELECT * FROM books WHERE in_shelf = 1 ORDER BY last_read_at DESC")
+    fun observeInShelf(): Flow<List<BookEntity>>
+
+    /** 切换「是否加入书架」。 */
+    @Query("UPDATE books SET in_shelf = :inShelf WHERE id = :id")
+    suspend fun setInShelf(id: String, inShelf: Boolean)
+
+    @Query("SELECT COUNT(*) FROM books WHERE in_shelf = 1")
+    fun observeShelfCount(): Flow<Int>
+
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun findById(id: String): BookEntity?
 

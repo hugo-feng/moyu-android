@@ -48,13 +48,32 @@ class BookRepository(
     private val chapterDao get() = database.chapterDao()
     private val positionDao get() = database.readingPositionDao()
 
-    /** 书架数据流：书籍 + 位置 + 分组的组合。 */
+    /**
+     * 书架数据流：**只含已加入书架**的书。
+     *
+     * 书库那一栏用 [libraryItems]（全部书）。两者共用同一个装配函数
+     * [assembleShelfItems]，避免「书架算出来的进度与书库不一致」这类问题。
+     */
     val shelfItems: Flow<List<ShelfItem>> = combine(
+        bookDao.observeInShelf(),
+        positionDao.observeAll(),
+    ) { books, positions -> assembleShelfItems(books, positions) }
+
+    /** 书库数据流：**全部**导入的书（含未加入书架的）。 */
+    val libraryItems: Flow<List<ShelfItem>> = combine(
         bookDao.observeAll(),
         positionDao.observeAll(),
-    ) { books, positions ->
+    ) { books, positions -> assembleShelfItems(books, positions) }
+
+    /** 书架里的书数量，用于底部标签上的角标与空状态判断。 */
+    val shelfCount: Flow<Int> = bookDao.observeShelfCount()
+
+    private fun assembleShelfItems(
+        books: List<com.moyu.reader.data.db.BookEntity>,
+        positions: List<com.moyu.reader.data.db.ReadingPositionEntity>,
+    ): List<ShelfItem> {
         val positionByBook = positions.associateBy { it.bookId }
-        books.map { entity ->
+        return books.map { entity ->
             val book = entity.toModel()
             val position = positionByBook[book.id]
             val percent = when {
@@ -71,6 +90,11 @@ class BookRepository(
                 lastReadLabel = formatRelativeTime(book.lastReadAt),
             )
         }
+    }
+
+    /** 切换「加入书架 / 移出书架」。 */
+    suspend fun setInShelf(bookId: String, inShelf: Boolean) = withContext(Dispatchers.IO) {
+        bookDao.setInShelf(bookId, inShelf)
     }
 
     val books: Flow<List<Book>> = bookDao.observeAll().map { list -> list.map { it.toModel() } }

@@ -524,3 +524,89 @@ class SettingsViewModel(container: AppContainer) : MoyuViewModel(container) {
     fun setShelfSort(v: ShelfSort) = scope.launch { store.setShelfSort(v) }
     fun setShelfLayout(v: ShelfLayout) = scope.launch { store.setShelfLayout(v) }
 }
+
+// ============================================================
+// 阅读历史
+// ============================================================
+
+/**
+ * 一本书的阅读历史汇总。
+ *
+ * 之所以按书聚合而不是逐条列出会话：会话是「每次进入阅读器算一段」，
+ * 逐条列出会得到几十上百条「读了 3 分钟」的记录，看不出任何东西。
+ * 用户想知道的是「我什么时候读过这本书、一共读了多久」。
+ */
+data class HistoryEntry(
+    val bookId: String,
+    val bookTitle: String,
+    val coverPath: String?,
+    /** 最后一次阅读的时刻（会话开始时间 + 时长）。 */
+    val lastReadAt: Long,
+    /** 累计阅读时长（秒）。 */
+    val totalSeconds: Int,
+    /** 阅读次数。 */
+    val sessionCount: Int,
+    /** 累计读过多少字。 */
+    val totalChars: Int,
+)
+
+/**
+ * 阅读历史 ViewModel。
+ *
+ * 它取代了原先底部的「笔记」标签。笔记没有消失 ——
+ * 仍然在阅读器的「本书笔记」面板里（按书查看，见 NotesViewModel 的 bookFilter），
+ * 只是不再占用一个全局标签位：全局列出所有书的笔记，
+ * 在书多起来之后并没有「找到某本书的笔记」这个真实用途。
+ */
+class HistoryViewModel(container: AppContainer) : MoyuViewModel(container) {
+
+    private val statsRepo = container.statsRepository
+
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
+
+    /**
+     * 按书聚合的历史，最近读的排在前面。
+     *
+     * 书可能已被删除，而会话记录会随外键级联一起清掉，
+     * 因此这里不需要额外处理「书不存在」的情况 ——
+     * 查不到标题的条目直接跳过，防止界面上出现空白项。
+     */
+    val entries: StateFlow<List<HistoryEntry>> =
+        kotlinx.coroutines.flow.combine(
+            statsRepo.sessions,
+            container.bookRepository.books,
+        ) { sessions, books ->
+            if (sessions.isEmpty()) return@combine emptyList()
+
+            val byId = books.associateBy { it.id }
+            sessions
+                .groupBy { it.bookId }
+                .mapNotNull { (bookId, list) ->
+                    val book = byId[bookId] ?: return@mapNotNull null
+                    val lastEnd = list.maxOf { it.startedAt + it.durationSec * 1000L }
+                    HistoryEntry(
+                        bookId = bookId,
+                        bookTitle = book.title,
+                        coverPath = book.coverPath,
+                        lastReadAt = lastEnd,
+                        totalSeconds = list.sumOf { it.durationSec },
+                        sessionCount = list.size,
+                        totalChars = list.sumOf { it.charCount },
+                    )
+                }
+                .sortedByDescending { it.lastReadAt }
+        }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 清空全部阅读历史（不影响书籍与笔记）。 */
+    fun clearHistory() {
+        scope.launch {
+            statsRepo.clearAll()
+            _message.value = "阅读历史已清空"
+        }
+    }
+
+    fun consumeMessage() {
+        _message.value = null
+    }
+}
