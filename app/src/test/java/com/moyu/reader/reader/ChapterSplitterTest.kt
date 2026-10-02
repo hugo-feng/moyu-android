@@ -258,6 +258,65 @@ class ChapterSplitterTest {
         assertEquals(1, ChapterSplitter.split(text).size)
     }
 
+    // ------------------------------------------------------------------
+    // 剧本体例：幕 / 场 / 序幕
+    // 这几条来自一个真实文件（空蝉），它的结构标记就是下面这几种写法。
+    // 原先一个都认不出来，于是走了「按 3000 字均匀切块」的兜底，
+    // 3 万字的文本被切成约 10 节 —— 用户看到的就是「好端端的短篇
+    // 为什么分成很多节」。
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `剧本的幕次标记会被识别为章节`() {
+        val text = buildString {
+            append("序幕邂逅\n")
+            append("时光飞逝，年号更迭为大正。正当人们都还在摸索新事物的时代。\n")
+            append("第一幕憧憬\n")
+            append("龙之介现在的身分是某个作家的门下弟子。\n")
+            append("第二幕赔偿损失\n")
+            append("采访第四天。龙之介走出房外。\n")
+        }
+        val chapters = ChapterSplitter.split(text)
+
+        assertEquals("应识别出 3 个章节", 3, chapters.size)
+        assertTrue("第一幕应被认出", chapters.any { it.title.contains("憧憬") })
+        assertTrue("第二幕应被认出", chapters.any { it.title.contains("赔偿") })
+        assertLossless(text, chapters)
+    }
+
+    @Test
+    fun `序幕后面不带空格也能识别`() {
+        // 真实文件里写的是「序幕邂逅」，中间**没有空格**。
+        // 原先的正则要求「标记 + 空白 + 描述」，因此匹配不上。
+        val chapters = ChapterSplitter.split("序幕邂逅\n正文内容。\n")
+        assertTrue(
+            "「序幕邂逅」应被识别为标题，实际得到：${chapters.map { it.title }}",
+            chapters.any { it.detected && it.title.contains("邂逅") },
+        )
+    }
+
+    @Test
+    fun `第N场也会被识别`() {
+        // 「场」是剧本的另一级单位，与「幕」一起补进量词表
+        val text = "第一场 相遇\n内容甲。\n第二场 别离\n内容乙。\n"
+        val chapters = ChapterSplitter.split(text)
+        assertEquals(2, chapters.size)
+        assertLossless(text, chapters)
+    }
+
+    @Test
+    fun `没有可识别标题时走兜底切块而不是当成一章`() {
+        // 这条记录兜底行为本身：一篇文章若完全没有章节特征，
+        // 会按 fallbackChunkSize 均匀切块。用户的文件正是走了这条路。
+        val text = buildString {
+            repeat(400) { append("这是一段没有任何章节标记的普通正文内容，用来触发兜底切块逻辑。\n") }
+        }
+        val chapters = ChapterSplitter.split(text, fallbackChunkSize = 800)
+        assertTrue("无标题的长文本应被切成多块，实际 ${chapters.size}", chapters.size > 1)
+        assertTrue("兜底块不应被标记为 detected", chapters.none { it.detected })
+        assertLossless(text, chapters)
+    }
+
     @Test
     fun `真正的单一短标题仍然会被识别`() {
         // 反向保护：判据改成「标题像不像」之后，
