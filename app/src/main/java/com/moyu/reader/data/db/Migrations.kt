@@ -78,3 +78,23 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         )
     }
 }
+
+/**
+ * 版本 3 → 4：books 增加 `split_version`（分章结果所用的规则版本）。
+ *
+ * 默认 0 = 「早于版本化之前导入的书」。这些书的章节是旧规则切的，
+ * 打开时会触发一次重新分章 —— 这正是我们要的效果：
+ * 用户升级后不必删书重导，旧书自动用新规则重切。
+ *
+ * 为什么不在迁移里直接重算：迁移跑在数据库打开时，此时还没有
+ * BookRepository（它依赖数据库本身），也拿不到解析器。
+ * 而且重算是逐本的、可能耗时，放在迁移里会拖慢冷启动。
+ * 改成「打开某本书时检查并重算」，代价分散且用户无感。
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE `books` ADD COLUMN `split_version` INTEGER NOT NULL DEFAULT 0",
+        )
+    }
+}

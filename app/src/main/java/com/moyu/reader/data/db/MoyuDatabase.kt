@@ -42,7 +42,7 @@ class Converters {
         BookGroupEntity::class,
         UserDictionaryEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -75,6 +75,6 @@ abstract class MoyuDatabase : RoomDatabase() {
                 .build()
 
         /** 所有历史迁移，按版本递增。新增迁移必须登记到这里，否则运行时会漏掉。 */
-        private val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        private val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
     }
 }

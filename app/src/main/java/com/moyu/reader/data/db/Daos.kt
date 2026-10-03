@@ -38,6 +38,10 @@ interface BookDao {
     @Query("UPDATE books SET in_shelf = :inShelf WHERE id = :id")
     suspend fun setInShelf(id: String, inShelf: Boolean)
 
+    /** 记录分章结果所用的规则版本。 */
+    @Query("UPDATE books SET split_version = :version WHERE id = :id")
+    suspend fun setSplitVersion(id: String, version: Int)
+
     @Query("SELECT COUNT(*) FROM books WHERE in_shelf = 1")
     fun observeShelfCount(): Flow<Int>
 
@@ -260,5 +264,24 @@ interface TransactionDao {
     suspend fun deleteGroup(groupId: String, groupDao: BookGroupDao) {
         groupDao.clearGroupOnBooks(groupId)
         groupDao.deleteById(groupId)
+    }
+
+    /**
+     * 用重切后的章节替换旧章节，并记录规则版本。任一步失败则整体回滚。
+     *
+     * 抽到这里而不是在仓储里手拼：多表一致性属于 DAO 的职责，
+     * 而且 `@Transaction` 标注只在这个接口上生效。
+     */
+    @Transaction
+    suspend fun replaceChapters(
+        bookId: String,
+        chapters: List<ChapterEntity>,
+        splitVersion: Int,
+        chapterDao: ChapterDao,
+        bookDao: BookDao,
+    ) {
+        chapterDao.deleteByBook(bookId)
+        chapterDao.insertAll(chapters)
+        bookDao.setSplitVersion(bookId, splitVersion)
     }
 }

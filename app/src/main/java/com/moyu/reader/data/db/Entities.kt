@@ -56,6 +56,26 @@ data class BookEntity(
     @ColumnInfo(name = "added_at") val addedAt: Long,
     @ColumnInfo(name = "last_read_at") val lastReadAt: Long,
     /**
+     * 分章结果是用哪一版规则算出来的。
+     *
+     * ## 为什么需要它
+     *
+     * 章节是**导入时一次性算好存进库里**的（不是每次打开现算）。
+     * 于是改了分章规则之后，已经导入的书仍然保留旧的分章结果 ——
+     * 用户升级后发现「目录还是十几个第 N 节」，以为修复没生效。
+     *
+     * 更麻烦的是重新导入也不行：判重逻辑按「标题 + 字数」比对，
+     * 同一本书会被判为 Duplicate 直接返回，章节根本不会重算。
+     *
+     * 所以给分章结果打一个版本号：打开书时若版本落后，
+     * 就用库里存的章节正文重建全文、按新规则重切一次。
+     * 全文没有丢 —— `chapters.content` 存的就是每章正文。
+     *
+     * 0 表示「早于版本化之前导入的书」。
+     */
+    @ColumnInfo(name = "split_version", defaultValue = "0")
+    val splitVersion: Int = 0,
+    /**
      * 是否已「加入书架」。
      *
      * ## 为什么需要两个位置

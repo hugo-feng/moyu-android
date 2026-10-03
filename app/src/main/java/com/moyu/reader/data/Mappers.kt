@@ -50,6 +50,7 @@ fun BookEntity.toModel(): Book = Book(
     addedAt = addedAt,
     lastReadAt = lastReadAt,
     inShelf = inShelf,
+    splitVersion = splitVersion,
 )
 
 fun Book.toEntity(sourceUri: String? = null, sourceModified: Long = 0L): BookEntity = BookEntity(
@@ -78,6 +79,7 @@ fun Book.toEntity(sourceUri: String? = null, sourceModified: Long = 0L): BookEnt
     addedAt = addedAt,
     lastReadAt = lastReadAt,
     inShelf = inShelf,
+    splitVersion = splitVersion,
 )
 
 fun ChapterEntity.toHeader(): ChapterHeader = ChapterHeader(

@@ -6,6 +6,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import com.moyu.reader.data.db.MIGRATION_1_2
 import com.moyu.reader.data.db.MIGRATION_2_3
+import com.moyu.reader.data.db.MIGRATION_3_4
 import com.moyu.reader.data.db.MoyuDatabase
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -139,7 +140,7 @@ class MigrationTest {
             // 两条迁移都要登记：目标 schema 是 v3，Room 需要一条
             // 从 v1 一路走到 v3 的完整路径。只给 1→2 会直接报
             // 「A migration from 1 to 3 was required but not found」。
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build()
 
         try {
@@ -172,7 +173,7 @@ class MigrationTest {
         // 真实用户的升级路径就是这样，只测单步会漏掉「链式中断」。
         val db = Room.databaseBuilder(context, MoyuDatabase::class.java, dbName)
             .allowMainThreadQueries()
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build()
 
         try {

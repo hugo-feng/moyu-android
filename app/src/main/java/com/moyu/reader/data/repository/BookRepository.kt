@@ -14,6 +14,7 @@ import com.moyu.reader.data.model.ShelfItem
 import com.moyu.reader.data.toEntity
 import com.moyu.reader.data.toHeader
 import com.moyu.reader.data.toModel
+import com.moyu.reader.reader.ChapterSplitter
 import com.moyu.reader.data.db.MoyuDatabase
 import com.moyu.reader.data.db.ReadingPositionEntity
 import com.moyu.reader.parser.EpubParser
@@ -105,6 +106,66 @@ class BookRepository(
 
     suspend fun getChapterHeaders(bookId: String): List<ChapterHeader> = withContext(Dispatchers.IO) {
         chapterDao.getChapterHeaders(bookId).map { it.toHeader() }
+    }
+
+    /**
+     * 若这本书的分章结果是用旧规则算的，就用新规则重切一次。
+     *
+     * ## 为什么需要
+     *
+     * 章节是导入时一次性算好存库的，不是每次打开现算。改了分章规则后，
+     * 已导入的书仍保留旧结果 —— 用户升级后发现目录还不对，以为修复没生效。
+     * 走「删掉重新导入」也不行：判重按「标题 + 字数」比对，会被判为
+     * Duplicate 直接返回，章节根本不会重算。
+     *
+     * ## 怎么重切
+     *
+     * 全文没有丢：`ChapterEntity.content` 存的就是每章正文。
+     * 按 index 顺序拼接即可还原原文，再交给 [ChapterSplitter] 重切。
+     *
+     * ## 为什么放在「打开书」时而不是迁移里
+     *
+     * 迁移跑在数据库打开时，此时拿不到仓储与解析器；而且重算是逐本的、
+     * 可能耗时，放在迁移里会拖慢冷启动。改成打开时检查，代价分散且用户无感。
+     *
+     * @return 是否真的重切了
+     */
+    suspend fun resplitIfOutdated(bookId: String): Boolean = withContext(Dispatchers.IO) {
+        val entity = bookDao.findById(bookId) ?: return@withContext false
+        if (entity.splitVersion >= ChapterSplitter.SPLIT_VERSION) return@withContext false
+
+        // 按 index 顺序拼回全文。顺序不能省 —— getByBook 不保证有序。
+        val chapters = chapterDao.getByBook(bookId).sortedBy { it.index }
+        if (chapters.isEmpty()) return@withContext false
+
+        val text = buildString(chapters.sumOf { it.content.length }) {
+            chapters.forEach { append(it.content) }
+        }
+        if (text.isEmpty()) return@withContext false
+
+        val resplit = ChapterSplitter.split(text)
+        // 重建的全文与重切结果必须无损，否则宁可不换 ——
+        // 换错会让用户的阅读位置指向别处
+        if (resplit.sumOf { it.length } != text.length) return@withContext false
+
+        database.transactionDao().replaceChapters(
+            bookId = bookId,
+            chapters = resplit.map { chapter ->
+                com.moyu.reader.data.db.ChapterEntity(
+                    bookId = bookId,
+                    index = chapter.index,
+                    title = chapter.title,
+                    content = chapter.content,
+                    start = chapter.start,
+                    length = chapter.length,
+                    detected = chapter.detected,
+                )
+            },
+            splitVersion = ChapterSplitter.SPLIT_VERSION,
+            chapterDao = chapterDao,
+            bookDao = bookDao,
+        )
+        true
     }
 
     /** 取单章正文。刻意不做整本加载：大文件下那会直接 OOM。 */

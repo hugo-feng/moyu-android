@@ -37,6 +37,8 @@ data class Book(
      * 默认 false —— 新导入的书不该自动占据书架。
      */
     val inShelf: Boolean = false,
+    /** 分章结果所用的规则版本；落后于当前版本时会在打开时重新分章。 */
+    val splitVersion: Int = 0,
 )
 
 /**

@@ -195,6 +195,19 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             }
             _book.value = book
 
+            /**
+             * 分章规则升级后，旧书要重新分章。
+             *
+             * 章节是导入时一次性算好存库的。改了规则之后，已导入的书
+             * 仍然保留旧结果 —— 用户升级后发现目录还不对，以为修复没生效。
+             * 重新导入也不行：判重按「标题 + 字数」比对，会被判为
+             * Duplicate 直接返回，章节根本不会重算。
+             *
+             * 因此在这里检查规则版本：落后就用库里存的章节正文重建全文、
+             * 按新规则重切一次。全文没丢 —— ChapterEntity.content 就是正文。
+             */
+            runCatching { bookRepo.resplitIfOutdated(bookId) }
+
             val headers = bookRepo.getChapterHeaders(bookId)
             _chapterHeaders.value = headers
 
