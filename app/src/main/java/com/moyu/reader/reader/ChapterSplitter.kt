@@ -281,6 +281,42 @@ object ChapterSplitter {
         return candidates
     }
 
+    /**
+     * 章首标题行占掉的长度（含行尾换行）；不是标题行则返回 0。
+     *
+     * ## 为什么需要它
+     *
+     * 分章时标题行是**保留在正文里**的（见 [split]），因为
+     * 「重新分章」要能把各章正文拼回全文、且长度分毫不差
+     * （`BookRepository.resplitIfOutdated` 靠这个不变量决定是否替换）。
+     *
+     * 但渲染时标题已经单独排成标题块了，正文首行再来一遍就是同一句话
+     * 印两遍。阅读页用这个函数把那一行从正文里让出去：
+     *   - 分页模式：分页从 `skip` 之后开始，页码区间整体后移，坐标系不变；
+     *   - 滚动模式：正文切片从 `skip` 开始，标题用标题的样式单独画。
+     *
+     * 比对时**忽略所有空白**：标题在分章时被规范化过
+     * （「序幕邂逅」会变成「序幕 邂逅」），直接用原文比会判不出来。
+     *
+     * @return 需要跳过的字符数（标题行长度 + 1 个换行）
+     */
+    fun headingSkipLength(content: String, title: String): Int {
+        if (content.isEmpty() || title.isBlank()) return 0
+        val lineEnd = content.indexOf('\n')
+        val firstLine = if (lineEnd < 0) content else content.substring(0, lineEnd)
+        // 单行文件不可能是「标题 + 正文」的结构，跳过它等于把正文整章吃掉
+        if (lineEnd < 0) return 0
+
+        val normalizedLine = firstLine.filterNot { it.isWhitespace() }
+        val normalizedTitle = title.filterNot { it.isWhitespace() }
+        if (normalizedLine.isEmpty() || normalizedLine != normalizedTitle) return 0
+
+        // 标题行本身不能太长，否则说明这是正文首段恰好与标题同名
+        if (normalizedLine.length > MAX_PLAUSIBLE_TITLE_LENGTH) return 0
+
+        return lineEnd + 1
+    }
+
     /** 按段落边界把长文本切成兜底块。 */
     private fun chunkByParagraph(text: String, chunkSize: Int): List<Chapter> {
         val chapters = mutableListOf<Chapter>()

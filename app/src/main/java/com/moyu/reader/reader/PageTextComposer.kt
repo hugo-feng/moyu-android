@@ -75,6 +75,15 @@ object PageTextComposer {
         pageStart: Int,
         indentEm: Float,
         paragraphSpacingMultiplier: Float,
+        /**
+         * 切片是否**从一段的中间**开始。
+         *
+         * 分页时量的是整章，渲染时画的是「本页那一片」。若这一页恰好从某段
+         * 中间开始，它本就不是段首，**不该再加首行缩进** —— 加了的话这一页
+         * 比量出来的长两个字，累积到行尾就可能多顶出一行，末行被裁。
+         * 判断依据只有调用方知道（要看到前一个字符），所以做成参数。
+         */
+        startsMidParagraph: Boolean = false,
     ): Layout {
         val indentLen = indentLength(indentEm)
         val breaks = paragraphBreakCount(paragraphSpacingMultiplier)
@@ -91,8 +100,9 @@ object PageTextComposer {
 
             if (trimmed.isNotEmpty()) {
                 if (!firstEmitted) render += breaks
+                // 从段中间开始的切片，它的第一行不是段首，不缩进
+                if (!(firstEmitted && startsMidParagraph)) render += indentLen
                 firstEmitted = false
-                render += indentLen
 
                 lines.add(LineSpan(render, sourceLineStart, trimmed.length, trimmed))
                 render += trimmed.length
@@ -106,11 +116,50 @@ object PageTextComposer {
     }
 
     /**
+     * 按渲染规则把一段正文拼成**最终要画的字符串**。
+     *
+     * ## 为什么分页必须用它
+     *
+     * 渲染时会插入内容：段首缩进、段落之间的空行。如果分页量的是**原始正文**，
+     * 量出来的行数就比真正画出来的少 —— 段间距调大之后（每段多一个空行），
+     * 一页会多出十几行，版心根本装不下，末行被裁掉，用户看到的是
+     * 「页尾少了一截」。
+     *
+     * 因此分页与渲染必须**量同一个字符串**：分页量它，渲染也从它取。
+     * 与 [buildPageText] 共用 [layoutOf]，两者不可能不同步。
+     */
+    fun render(
+        pageText: String,
+        pageStart: Int = 0,
+        indentEm: Float,
+        paragraphSpacingMultiplier: Float,
+        startsMidParagraph: Boolean = false,
+    ): String {
+        val layout = layoutOf(
+            pageText = pageText,
+            pageStart = pageStart,
+            indentEm = indentEm,
+            paragraphSpacingMultiplier = paragraphSpacingMultiplier,
+            startsMidParagraph = startsMidParagraph,
+        )
+        if (layout.lines.isEmpty()) return ""
+        val indent = if (layout.indentLength > 0) "\u3000".repeat(layout.indentLength) else ""
+        val builder = StringBuilder(layout.renderLength)
+        layout.lines.forEachIndexed { index, span ->
+            if (index > 0) repeat(layout.paragraphBreaks) { builder.append('\n') }
+            // 首段是否缩进由 layoutOf 记在 renderStart 上：
+            // 从段中间开始的切片，它的第一行 renderStart 就是 0，不加缩进
+            if (indent.isNotEmpty() && span.renderStart > 0) builder.append(indent)
+            builder.append(span.text)
+        }
+        return builder.toString()
+    }
+
+    /**
      * 渲染文本下标 → 章内字符偏移。
      *
      * 落在缩进、段落空行或行尾换行上时归到**该段段首** ——
-     * 那些位置本就不对应任何源字符，归到段首比返回 null 更符合直觉
-     * （用户长按段首空白，想标的就是这一段）。
+     * 那些位置本就不对应任何源字符，归到段首比返回 null 更符合直觉。
      *
      * @return 章内偏移；整页为空时返回 null
      */
@@ -120,9 +169,16 @@ object PageTextComposer {
         indentEm: Float,
         paragraphSpacingMultiplier: Float,
         renderOffset: Int,
+        startsMidParagraph: Boolean = false,
     ): Int? {
         if (renderOffset < 0) return null
-        val layout = layoutOf(pageText, pageStart, indentEm, paragraphSpacingMultiplier)
+        val layout = layoutOf(
+            pageText = pageText,
+            pageStart = pageStart,
+            indentEm = indentEm,
+            paragraphSpacingMultiplier = paragraphSpacingMultiplier,
+            startsMidParagraph = startsMidParagraph,
+        )
         if (layout.lines.isEmpty()) return null
 
         for (span in layout.lines) {

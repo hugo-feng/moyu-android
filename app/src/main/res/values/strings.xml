@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Reader</string>
+    <string name="app_name">墨鱼阅读</string>
 
     <!-- 书架 -->
     <string name="shelf_title">我的书架</string>
@@ -50,7 +50,7 @@
     <!-- 设置 -->
     <string name="settings_appearance">外观</string>
     <string name="settings_reading">阅读</string>
-    <string name="settings_tts">朗读（TTS）</string>
+    <string name="settings_tts">朗读</string>
     <string name="settings_dictionary">词典</string>
     <string name="settings_data">数据</string>
     <string name="settings_about">关于</string>

@@ -197,9 +197,15 @@ fun MoyuApp(
                     factory = factory,
                     bookId = entry.arguments?.getString("bookId").orEmpty(),
                     onBack = { navController.popBackStack() },
-                    onRead = { id -> navController.navigate(Routes.reader(id)) },
-                    onOpenToc = { id -> navController.navigate(Routes.reader(id)) },
-                    onOpenNotes = { id -> navController.navigate(Routes.bookNotes(id)) },
+                    // 「重新阅读」带上第 0 章：阅读器会跳回开头，而不是沿用上次位置
+                    onRead = { id, restart ->
+                        navController.navigate(Routes.reader(id, if (restart) 0 else -1))
+                    },
+                    // 目录里点某一章：带着章号进阅读器，直接停在那一章
+                    onOpenChapter = { id, index ->
+                        navController.navigate(Routes.reader(id, index))
+                    },
+                    onOpenBookmarks = { id -> navController.navigate(Routes.bookNotes(id)) },
                 )
             }
 
@@ -304,6 +310,13 @@ fun MoyuApp(
                 ImportScreen(
                     factory = factory,
                     onBack = { navController.popBackStack() },
+                    // 导入完成 → 直接进阅读器读刚导入的那本
+                    onOpenBook = { bookId ->
+                        navController.navigate(Routes.reader(bookId, 0)) {
+                            // 导入页从栈里摘掉：读完返回应该回到书库，而不是导入页
+                            popUpTo(Routes.IMPORT) { inclusive = true }
+                        }
+                    },
                 )
             }
         }

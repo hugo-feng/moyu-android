@@ -13,6 +13,20 @@ package com.moyu.reader.data.model
 
 enum class BookFormat { TXT, EPUB, PDF }
 
+/**
+ * 格式的中文名，给界面显示用。
+ *
+ * 界面上一律用中文：封面上那个角标、详情页的「文本 · 3 万字 · 12 章」
+ * 都是用户直接看到的字，不该出现英文缩写。
+ * 枚举名本身保持英文 —— 它是要入库的稳定标识，不能为了显示去改。
+ */
+val BookFormat.displayName: String
+    get() = when (this) {
+        BookFormat.TXT -> "文本"
+        BookFormat.EPUB -> "电子书"
+        BookFormat.PDF -> "PDF 文档"
+    }
+
 enum class ReadingStatus { UNREAD, READING, FINISHED }
 
 /** 书架卡片所需的书籍信息（不含正文）。 */

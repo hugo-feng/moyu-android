@@ -14,6 +14,7 @@ import com.moyu.reader.data.model.ReadingPosition
 import com.moyu.reader.data.model.ReadingStatus
 import com.moyu.reader.data.prefs.PageMode
 import com.moyu.reader.data.prefs.ReaderSettings
+import com.moyu.reader.reader.ChapterSplitter
 import com.moyu.reader.reader.DictionaryProvider
 import com.moyu.reader.reader.PaginationEngine
 import kotlinx.coroutines.Dispatchers
@@ -279,6 +280,15 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             append(prefs.bold).append('|')
             append(prefs.indentEm).append('|')
             append(prefs.letterSpacingEm).append('|')
+            /**
+             * 段间距与两端对齐也必须进缓存键。
+             *
+             * 段间距直接改变**渲染出来的文本**（段落之间插几个换行），
+             * 漏掉它的话：用户在面板里按一下「段间距」，分页结果原地不动，
+             * 正文却多出一行空行 —— 版心装不下，末行被裁掉，页数也不再对。
+             */
+            append(prefs.paragraphSpacingMultiplier).append('|')
+            append(prefs.justify).append('|')
             append(viewport.first).append('x').append(viewport.second).append('|')
             // 正文区实测的宽与高、以及章首页标题高度，都必须进缓存键：
             // 它们决定每页放几行、每行放几字，变了却不重排就会少字或被裁。
@@ -367,7 +377,78 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             firstPageHeaderHeight = firstPageHeaderHeight,
         )
 
-        val pages = PaginationEngine.paginate(chapter.content, metrics, paint)
+        /**
+         * 章首那行标题不参与正文排版。
+         *
+         * 分章时标题行被保留在正文里 —— 「重新分章」要能把各章正文拼回全文
+         * 且长度分毫不差，靠的就是这个不变量。但阅读页已经用标题的样式
+         * 单独画了它，正文再来一遍就是同一句话印两遍（用户看到的
+         * 「序幕 邂逅」下面紧跟一行「序幕邂逅」）。
+         *
+         * 让步方式是**整体后移**：分页从标题之后开始，再把每页的区间
+         * 平移回去。这样 `Page.start/end` 仍然是「章内偏移」，
+         * 书签、进度、搜索跳转用的坐标系一个字都不用改。
+         */
+        val headingSkip = ChapterSplitter.headingSkipLength(chapter.content, chapter.title)
+        val bodyText = if (headingSkip > 0) chapter.content.substring(headingSkip) else chapter.content
+
+        /**
+         * 分页量的是**渲染后的字符串**，不是原始正文。
+         *
+         * 渲染会插东西：段首缩进、段落之间的空行。量原始正文就等于少算
+         * 这些行 —— 段间距一调大（每段多一个空行，一页多十几行），
+         * 分页以为装得下，实际画出来远超版心，末行被裁掉。
+         * 用户看到的是「页尾少了一截字」，而且他会以为是自己看漏了。
+         *
+         * 于是：分页量 `rendered`，页边界再**映射回章内偏移**，
+         * 保证 `Page.start/end` 仍然落在「章内偏移」这个统一坐标系上
+         * （书签、进度、搜索跳转全靠它）。
+         */
+        val rendered = com.moyu.reader.reader.PageTextComposer.render(
+            pageText = bodyText,
+            pageStart = headingSkip,
+            indentEm = prefs.indentEm,
+            paragraphSpacingMultiplier = prefs.paragraphSpacingMultiplier,
+        )
+
+        /** 渲染下标 → 章内偏移。渲染文本为空时按章首处理。 */
+        fun toChapterOffset(renderOffset: Int, isEnd: Boolean): Int {
+            if (isEnd && renderOffset >= rendered.length) return chapter.content.length
+            return com.moyu.reader.reader.PageTextComposer.renderOffsetToChapterOffset(
+                pageText = bodyText,
+                pageStart = headingSkip,
+                indentEm = prefs.indentEm,
+                paragraphSpacingMultiplier = prefs.paragraphSpacingMultiplier,
+                renderOffset = renderOffset,
+            ) ?: if (isEnd) chapter.content.length else headingSkip
+        }
+
+        val paginated = PaginationEngine.paginate(rendered, metrics, paint)
+
+        /**
+         * 边界必须单调、不能出现空页。
+         *
+         * 映射会把「落在缩进/空行里的下标」归到段首，相邻两页的边界
+         * 因此可能落到同一个字符上 —— 不清理的话会出现一页空白，
+         * 用户翻过去以为卡住了。
+         */
+        val pages = ArrayList<PaginationEngine.Page>(paginated.size)
+        var cursor = headingSkip
+        paginated.forEach { page ->
+            val start = toChapterOffset(page.start, false).coerceAtLeast(cursor)
+            val end = toChapterOffset(page.end, true).coerceAtLeast(start)
+            if (end > start) {
+                pages.add(PaginationEngine.Page(pages.size, start, end))
+                cursor = end
+            }
+        }
+        if (pages.isEmpty()) {
+            pages.add(PaginationEngine.Page(0, headingSkip, chapter.content.length))
+        } else if (pages.last().end < chapter.content.length) {
+            // 末页必须覆盖到章末，否则最后几个字永远读不到
+            pages[pages.size - 1] = pages.last().copy(end = chapter.content.length)
+        }
+
         _pages.value = pages
         // 页码可能越界（字号变大后页数变多）
         _pageIndex.value = _pageIndex.value.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
@@ -501,6 +582,40 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
         }
     }
 
+    /**
+     * 滚动模式上报「现在读到章内第几个字」。
+     *
+     * ## 为什么滚动模式也要上报
+     *
+     * 滚动模式没有「页」，早先它**从不更新页码**，于是：
+     *   - 退出时 `persistNow()` 存下的还是本章页首的位置 ——
+     *     用户滚着读了三千字，下次打开回到本章开头；
+     *   - 阅读进度、时长与「已读百分比」也一直停在章首。
+     *
+     * 这里把滚动位置折算成页码（复用同一套分页结果，跨模式口径一致），
+     * 之后所有既有逻辑（持久化、进度、书签判定）就都跟着对了。
+     */
+    fun setScrollChapterOffset(chapterOffset: Int) {
+        val pages = _pages.value
+        if (pages.isEmpty()) return
+        val index = PaginationEngine.pageIndexForOffset(pages, chapterOffset)
+        if (index == _pageIndex.value) return
+        _pageIndex.value = index
+        schedulePersist()
+    }
+
+    /**
+     * 进入滚动模式时应该滚到的位置（0~1 的比例）。
+     *
+     * 依据是「上次读到的章内偏移 / 本章总长」。没有记录时返回 0（从头开始）。
+     */
+    fun scrollStartFraction(): Float {
+        val chapter = _currentChapter.value ?: return 0f
+        if (chapter.content.isEmpty()) return 0f
+        val offset = _pages.value.getOrNull(_pageIndex.value)?.start ?: 0
+        return (offset.toFloat() / chapter.content.length).coerceIn(0f, 1f)
+    }
+
     /** 跳转到指定章（目录点击）。 */
     fun jumpToChapter(index: Int, density: Density, offset: Int = 0) {
         val headers = _chapterHeaders.value
@@ -631,14 +746,17 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
      *   - 英文/数字：连续的字母数字算一个词（`ReaderViewModel` 的 isWordChar）
      *   - 中文/日文：**单个汉字就是一个词**。中文没有词间空格，
      *     想按「词」切分需要分词词典；而标注场景下选中一两个字通常就够用了，
-     *     为此引入一个词典得不偿失。所以长按选中一个汉字，用户可以再拖手柄扩展。
+     *     为此引入一个词典得不偿失。所以长按选中一个汉字，用户可以再拖手指扩展。
      *
      * @param chapterOffset 章内字符下标（不是页内下标 —— 书签与笔记存的是章内偏移）
+     * @return 选中区间（章内闭区间）；内容越界或选不中时返回 null。
+     *   阅读页需要它作为「拖拽扩选」的锚点：从这个词出发向两侧扩，
+     *   而不是每拖一下就重新取一次词。
      */
-    fun selectWordAt(chapterOffset: Int) {
-        val chapter = _currentChapter.value ?: return
+    fun selectWordAt(chapterOffset: Int): IntRange? {
+        val chapter = _currentChapter.value ?: return null
         val content = chapter.content
-        if (chapterOffset !in content.indices) return
+        if (chapterOffset !in content.indices) return null
 
         val anchor = content[chapterOffset]
         var start = chapterOffset
@@ -649,11 +767,12 @@ class ReaderViewModel(container: AppContainer) : MoyuViewModel(container) {
             while (start > 0 && isWordChar(content[start - 1])) start--
             while (end < content.length && isWordChar(content[end])) end++
         }
-        // 汉字与标点：只选中按下那一个字符，由用户拖手柄扩展
+        // 汉字与标点：只选中按下那一个字符，由用户拖手指扩展
 
         val text = content.substring(start, end)
-        if (text.isBlank()) return
+        if (text.isBlank()) return null
         _selection.value = TextSelection(start, end, text)
+        return start..(end - 1)
     }
 
     /** 西文「词」的构成字符：字母、数字、下划线，以及词内的连字符与撇号。 */

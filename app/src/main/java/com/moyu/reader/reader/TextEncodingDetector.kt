@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets
  *   1. BOM 优先（UTF-8 / UTF-16LE / UTF-16BE）；
  *   2. 严格 UTF-8 校验（用平台解码器的 REPORT 模式，不自造字节校验器）；
  *   3. 无 BOM 的 UTF-16 启发式（ASCII 文本在 UTF-16 下出现大量 0x00）；
- *   4. GB18030（GBK 的超集）；
+ *   4. GB18030 与 Big5 **分别解码后比质量**（可读字符比例 + 替换字符数）；
  *   5. 兜底 UTF-8 并标记不确定。
  *
  * 为什么必须做这件事：中文 TXT 没有统一编码，GBK 文本若按 UTF-8 解码会整篇变成
@@ -22,7 +22,13 @@ import java.nio.charset.StandardCharsets
  */
 object TextEncodingDetector {
 
-    /** 中文环境常见的候选编码，顺序即优先级。 */
+    /**
+     * 中文环境常见的候选编码，顺序即优先级。
+     *
+     * 注意它只用于**界面上的手工切换列表**（`Result.encoding` 与设置里的编码名）。
+     * 自动检测的判定顺序写在 [detectAndDecode] 里 —— 那不是「按顺序试」，
+     * 而是「先严格校验 UTF-8，再对 GB18030/Big5 比质量」，两者不是一回事。
+     */
     val CANDIDATES: List<String> = listOf("UTF-8", "GB18030", "UTF-16LE", "UTF-16BE", "GBK", "Big5")
 
     data class Result(
@@ -123,16 +129,35 @@ object TextEncodingDetector {
             }
         }
 
-        // 4) GB18030（GBK 的超集，覆盖全部中文 Windows 编码）
+        // 4) GB18030 / Big5 —— 两者都是「无 BOM 的繁体/简体中文」，
+        //    必须**解码后比质量**，不能先到先得。
+        //
+        //    这里原先是直接返回 GB18030：而 Big5 的字节序列在 GB18030 下
+        //    往往也能解出**一堆合法但毫不相干的汉字**（乱码不是替换字符，
+        //    所以「替换字符个数」这一招对它无效），于是繁体书打开就是满屏乱码。
+        //    现在两种都解一遍，用**可读字符比例 + 替换字符数**打分，谁高用谁。
         val gb18030 = runCatching { Charset.forName("GB18030") }.getOrNull()
-        if (gb18030 != null) {
-            val text = decodeLenient(bytes, gb18030)
-            val replacements = countReplacements(text)
+        val big5 = runCatching { Charset.forName("Big5") }.getOrNull()
+
+        if (gb18030 != null || big5 != null) {
+            val candidates = ArrayList<Triple<String, String, Int>>()
+            gb18030?.let {
+                val text = decodeLenient(bytes, it)
+                candidates.add(Triple("GB18030", text, countReplacements(text)))
+            }
+            big5?.let {
+                val text = decodeLenient(bytes, it)
+                candidates.add(Triple("Big5", text, countReplacements(text)))
+            }
+            // 可读比例高者优先；平手时替换字符少者优先；再平手时保持顺序（GB18030 在前）
+            val best = candidates.maxWithOrNull(
+                compareBy({ readableRatio(it.second) }, { -it.third }),
+            ) ?: candidates.first()
             return Result(
-                text = text,
-                encoding = "GB18030",
-                replacementCount = replacements,
-                uncertain = replacements > 0 || readableRatio(text) < 0.5,
+                text = best.second,
+                encoding = best.first,
+                replacementCount = best.third,
+                uncertain = best.third > 0 || readableRatio(best.second) < 0.5,
             )
         }
 

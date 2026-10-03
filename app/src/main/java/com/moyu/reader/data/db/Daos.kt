@@ -216,6 +216,18 @@ interface BookGroupDao {
     /** 删除分组时把组内书籍的 group_id 清空，避免出现指向不存在分组的悬空引用。 */
     @Query("UPDATE books SET group_id = NULL WHERE group_id = :groupId")
     suspend fun clearGroupOnBooks(groupId: String)
+
+    /**
+     * 清空全部分组。
+     *
+     * 「清除全部数据」必须用它 —— 之前只删书不删分组：分组是用户建的，
+     * 清空数据后仍然留在书架上，点进去却是空的，看起来像没清干净。
+     */
+    @Query("DELETE FROM book_groups")
+    suspend fun clearAll()
+
+    @Query("UPDATE books SET group_id = NULL")
+    suspend fun clearAllGroupRefs()
 }
 
 @Dao
@@ -232,6 +244,10 @@ interface UserDictionaryDao {
 
     @Query("DELETE FROM user_dictionaries WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /** 清空用户导入的词典（「清除全部数据」要连它一起清）。 */
+    @Query("DELETE FROM user_dictionaries")
+    suspend fun clearAll()
 }
 
 /**

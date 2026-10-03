@@ -200,8 +200,16 @@ class SettingsStore(private val context: Context) {
     suspend fun setLineHeight(multiplier: Float) =
         store.edit { it[Keys.lineHeight] = multiplier.coerceIn(1.2f, 2.6f) }
 
+    /**
+     * 段间距：段落之间插几个空行。
+     *
+     * 语义就是「空行数」而不是一个抽象倍率 —— 渲染侧拿它取整
+     * （见 PageTextComposer.paragraphBreakCount），所以 1.0 / 2.0 / 3.0
+     * 分别对应 1、2、3 个空行，界面上也按「N 个空行」显示。
+     * 卡在 1~3：0 会让段落粘成一片，再多就只剩空白。
+     */
     suspend fun setParagraphSpacing(multiplier: Float) =
-        store.edit { it[Keys.paragraphSpacing] = multiplier.coerceIn(0f, 2f) }
+        store.edit { it[Keys.paragraphSpacing] = multiplier.coerceIn(1f, 3f) }
 
     suspend fun setMargin(dp: Int) =
         store.edit { it[Keys.margin] = dp.coerceIn(MIN_MARGIN, MAX_MARGIN) }

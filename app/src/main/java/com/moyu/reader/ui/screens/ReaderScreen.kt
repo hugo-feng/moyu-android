@@ -4,8 +4,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,22 +30,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -103,7 +103,6 @@ fun ReaderScreen(
     val pageIndex by viewModel.pageIndex.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
-    val selection by viewModel.selection.collectAsStateWithLifecycle()
     val dictResult by viewModel.dictResult.collectAsStateWithLifecycle()
     val dictLoading by viewModel.dictLoading.collectAsStateWithLifecycle()
     val autoReading by viewModel.autoReading.collectAsStateWithLifecycle()
@@ -174,6 +173,33 @@ fun ReaderScreen(
             viewModel.endSession()
             viewModel.stopAutoRead()
         }
+    }
+
+    /**
+     * 音量键翻页。
+     *
+     * 设置里那个开关从 v1.0 起就存在，但一直没有按键处理 ——
+     * 打开它按音量键只会调音量（审计里被明确标为「死设置」）。
+     * 这里接到 [com.moyu.reader.VolumeKeyRouter]：阅读页在的时候
+     * 音量键就是翻页键，离开阅读页立刻还原成音量键。
+     *
+     * 音量减=下一页、音量加=上一页，与主流阅读器一致（握持时拇指够得着）。
+     * 面板打开或工具栏可见时不翻页：那会儿用户在操作界面，误翻页很烦。
+     */
+    DisposableEffect(settings.volumeKeyPaging, sheet, chromeVisible) {
+        if (settings.volumeKeyPaging) {
+            com.moyu.reader.VolumeKeyRouter.handler = { volumeDown ->
+                if (sheet != ReaderSheet.NONE || chromeVisible) {
+                    false
+                } else {
+                    viewModel.flip(if (volumeDown) 1 else -1, density)
+                    true
+                }
+            }
+        } else {
+            com.moyu.reader.VolumeKeyRouter.handler = null
+        }
+        onDispose { com.moyu.reader.VolumeKeyRouter.handler = null }
     }
 
     /**
@@ -256,6 +282,8 @@ fun ReaderScreen(
             } else if (settings.pageMode == PageMode.SCROLL) {
                 ScrollReader(
                     content = chapterContent,
+                    chapterTitle = chapter?.title.orEmpty(),
+                    chapterNumberLabel = chapterNumberLabel(chapter?.title.orEmpty(), chapterIndex),
                     highlights = highlights,
                     settings = settings,
                     viewModel = viewModel,
@@ -270,7 +298,14 @@ fun ReaderScreen(
                     pageEnd = currentPage.end,
                     chapterTitle = chapter?.title.orEmpty(),
                     chapterNumberLabel = chapterNumberLabel(chapter?.title.orEmpty(), chapterIndex),
-                    showTitle = currentPage.start == 0,
+                    /**
+                     * 章首页 = 第 0 页。
+                     *
+                     * 不能用 `currentPage.start == 0` 判断：章首那行标题已经不在
+                     * 正文区间里了（见 ChapterSplitter.headingSkipLength），
+                     * 首页的起始偏移是标题之后的位置，不再是 0。
+                     */
+                    showTitle = pageIndex == 0,
                     settings = settings,
                     pageNumber = pageIndex + 1,
                     percent = viewModelPercent(pages, chapterHeaders, chapterIndex, pageIndex),
@@ -285,148 +320,88 @@ fun ReaderScreen(
             }
         }
 
-        // —— 手势层 ——
-        //
-        // 只在**分页模式**下注册：滚动模式的左右两半可以正常拖动/选中文字，
-        // 若也在这里响应点击，用户想点一下屏幕就会静默跳到下一章，
-        // 而屏幕上显示的还是滚动正文 —— 进度与实际脱节，且毫无提示。
-        if (settings.pageMode != PageMode.SCROLL) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    /**
-                     * 水平滑动翻页。
-                     *
-                     * 必须判断**累计位移**而不是单个事件的增量：
-                     * `dragAmount` 是每次 move 事件的位移，一次正常滑动会产生很多个
-                     * 超过阈值的 move，于是手指一划就连翻好几页。
-                     * 这里累加到 onDragEnd 时一次性判定，并且只翻一页。
-                     */
-                    .pointerInput(settings.pageMode, pages.size) {
-                        var accumulated = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { accumulated = 0f },
-                            onDragCancel = { accumulated = 0f },
-                            onDragEnd = {
-                                // 60dp 的滑动才算翻页：像素阈值在不同密度上手感差异太大
-                                val threshold = 60.dp.toPx()
-                                when {
-                                    accumulated <= -threshold -> viewModel.flip(1, density)
-                                    accumulated >= threshold -> viewModel.flip(-1, density)
-                                }
-                                accumulated = 0f
-                            },
-                        ) { _, dragAmount ->
-                            accumulated += dragAmount
-                        }
-                    }
-                    .pointerInput(settings.pageMode) {
-                        detectTapGestures(
-                            onTap = { offset ->
-                                val width = size.width
-                                val third = width / 3f
-                                when {
-                                    offset.x < third -> {
-                                        if (!chromeVisible) viewModel.flip(-1, density)
-                                    }
-
-                                    offset.x > third * 2 -> {
-                                        if (!chromeVisible) viewModel.flip(1, density)
-                                    }
-
-                                    else -> {
-                                        chromeVisible = !chromeVisible
-                                        if (!chromeVisible) sheet = ReaderSheet.NONE
-                                    }
-                                }
-                            },
-                            onLongPress = { },
-                        )
-                    },
-            )
-        }
 
         /**
-         * 点击手势层：**两种模式都需要**，但绝不能吃掉滚动。
+         * 手势层：**整个阅读页只有这一层**，而且全程不消费事件。
          *
-         * ## 为什么不用 detectTapGestures
+         * ## 为什么必须只有一层（用户报的「要点两下才能翻页」）
          *
-         * 这一层是盖在整个阅读区之上的。`detectTapGestures` 一旦挂上就会
-         * 消费手势流，于是：滚动模式里正文的 `verticalScroll`
-         * **完全收不到拖动** —— 用户报「滚动完全动不了」。
+         * 之前这里是两层叠加：一层是 `detectTapGestures` +
+         * `detectHorizontalDragGestures`（只在分页模式注册），另一层是自己写的
+         * 指针跟踪。两层都实现了同一套三热区逻辑，于是**同一次点击被处理两遍**：
+         *   - 中间热区被切换两次 → 工具栏看起来「点了没反应」；
+         *   - 左右热区连翻两页 → 用户只好再点一次「补回来」。
+         * 再加上旧实现结尾那个「等手指全部抬起」的循环：它在手指已经抬起之后
+         * 才开始等，于是**下一次点击被整个吃掉** —— 这才是
+         * 「覆盖模式要点两下才能切换下一页」的真正来源。
          *
-         * 而且它判定点击只看「按下后短时间内抬起」，**不关心中间移动了多远**，
-         * 所以即使不消费，每次滑动也都会被它当成一次点击而弹出工具栏。
-         * 上一版试图用「比较按下与抬起的位移」来补救，但那时手势已经被消费了，
-         * 补不上 —— 位移大就 `return`，点击层什么也不做，而滚动层也收不到事件，
-         * 结果是**滑动既没滚动、也没反应**。
+         * ## 为什么不能用 detectTapGestures（用户报的「滚动不了」）
          *
-         * ## 正确做法：自己判方向，判成滑动就完全不消费
+         * 它一旦挂上就消费整条手势流：滚动模式的 `verticalScroll`
+         * 再也收不到拖动。而且它判定点击只看按下与抬起的时间差，
+         * **完全不关心中间移动了多远** —— 快速滑动也会被判成点击。
          *
-         * 用 `awaitPointerEventScope` 手动跟踪指针：
-         *   - 位移一旦超过 `touchSlop`，标记为拖动，之后**不消费任何事件**，
-         *     让 `verticalScroll` 正常接管；
-         *   - 抬起时若从未超过阈值，才算点击，执行热区逻辑。
+         * ## 现在这一层的职责
          *
-         * 关键在于「判成拖动后就不消费」：Compose 的手势传递里，
-         * 未被消费的事件会继续传给下层，滚动因此恢复。
+         * 只跟踪指针、只做判定，**一个事件都不消费**：
+         *   - 位移没超过 `touchSlop` → 点击：左/中/右三热区；
+         *   - 分页模式下横向位移超过阈值 → 翻页（判断累计位移而不是单帧增量，
+         *     否则一次滑动会产生很多个超过阈值的 move，一划连翻好几页）；
+         *   - 滚动模式下的纵向拖动 → 不消费，原样交给 `verticalScroll`。
+         *
+         * 正文自身不带任何手势：点击翻页、横向滑动翻页、纵向拖动滚动，
+         * 全部由这一层处理（正文一挂手势就会把滚动吃掉）。
+         *
+         * 「等手指抬起」那个循环已经删掉：内层循环本来就在抬手时退出，
+         * 外层的 `awaitFirstDown` 天然只认**新的按下**，不需要额外排空。
          */
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(settings.pageMode) {
                     val slop = viewConfiguration.touchSlop
+                    val flipThreshold = 56.dp.toPx()
                     awaitPointerEventScope {
                         while (true) {
                             val down = awaitFirstDown(requireUnconsumed = false)
-                            var dragged = false
-                            var totalMove = 0f
-                            var pointer = down
+                            var totalX = 0f
+                            var totalY = 0f
+                            var moved = false
 
-                            // 跟踪这一次按下的全过程
                             while (true) {
                                 val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == pointer.id }
-                                    ?: break
-
-                                if (change.changedToUpIgnoreConsumed()) break
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) break
-
-                                val delta = change.positionChange()
-                                totalMove += delta.getDistance()
-                                if (totalMove > slop) {
-                                    dragged = true
-                                    // 已判定为拖动：不再消费，交给滚动层
-                                    break
+                                // 必须用 IgnoreConsumed：滚动层消费过的位移
+                                // 用 positionChange() 读出来是 0，位移就永远累计不起来
+                                val delta = change.positionChangeIgnoreConsumed()
+                                totalX += delta.x
+                                totalY += delta.y
+                                if (!moved && kotlin.math.hypot(totalX, totalY) > slop) {
+                                    moved = true
                                 }
-                                pointer = change
                             }
 
-                            if (!dragged) {
-                                val pos = down.position
+                            if (!moved) {
                                 val third = size.width / 3f
-                                val middleOnly = settings.pageMode == PageMode.SCROLL
+                                val x = down.position.x
                                 when {
-                                    // 滚动模式：任意位置都当作「中间」——只切换工具栏
-                                    middleOnly || (pos.x >= third && pos.x <= third * 2) -> {
+                                    settings.pageMode == PageMode.SCROLL ||
+                                        (x >= third && x <= third * 2) -> {
                                         chromeVisible = !chromeVisible
                                         if (!chromeVisible) sheet = ReaderSheet.NONE
                                     }
 
-                                    pos.x < third -> {
-                                        if (!chromeVisible) viewModel.flip(-1, density)
-                                    }
+                                    x < third -> if (!chromeVisible) viewModel.flip(-1, density)
 
-                                    else -> {
-                                        if (!chromeVisible) viewModel.flip(1, density)
-                                    }
+                                    else -> if (!chromeVisible) viewModel.flip(1, density)
                                 }
-                            }
-
-                            // 等这一次手势彻底结束，避免把同一次触摸判成多次
-                            while (true) {
-                                val e = awaitPointerEvent()
-                                if (e.changes.all { !it.pressed }) break
+                            } else if (moved &&
+                                settings.pageMode != PageMode.SCROLL &&
+                                kotlin.math.abs(totalX) > flipThreshold &&
+                                kotlin.math.abs(totalX) > kotlin.math.abs(totalY)
+                            ) {
+                                viewModel.flip(if (totalX < 0f) 1 else -1, density)
                             }
                         }
                     }
@@ -464,19 +439,6 @@ fun ReaderScreen(
                 onSettings = {
                     sheet = if (sheet == ReaderSheet.TYPOGRAPHY) ReaderSheet.NONE else ReaderSheet.TYPOGRAPHY
                 },
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-        }
-
-        // —— 选中文字的浮动操作条 ——
-        if (selection != null) {
-            SelectionActions(
-                selectionText = selection!!.text,
-                onLookup = { viewModel.lookupSelection() },
-                onBookmark = { viewModel.addBookmarkAtSelection() },
-                onHighlight = { color, note -> viewModel.addHighlightFromSelection(note, color) },
-                onCopy = { copyToClipboard(context, selection!!.text) },
-                onDismiss = { viewModel.clearSelection() },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -699,9 +661,23 @@ private fun PagedReader(
              */
 
             // 即将翻到的那一页，画在上层
+            /**
+             * 「无动画」必须是**真的没有过渡**。
+             *
+             * 之前这里给的是 `if (entered) progress else 0f`，而 NONE 模式的
+             * `tween(0)` 仍然会让 `animateFloatAsState` 走一帧插值，
+             * 新页从「完全透明」淡进来 —— 与设置里写的「直接切换，没有过渡」
+             * 不是一回事（审计里就是这么记的）。
+             * 这里直接把进度钉成 1：NONE 模式下页面永远处于「已就位」。
+             */
+            val frameProgress = when {
+                settings.pageMode == PageMode.NONE -> 1f
+                entered -> progress
+                else -> 0f
+            }
             val incomingGeometry = pageGeometry(
                 mode = settings.pageMode,
-                progress = if (entered) progress else 0f,
+                progress = frameProgress,
                 incoming = true,
                 forward = forward,
                 widthPx = pageWidthPx,
@@ -715,6 +691,7 @@ private fun PagedReader(
                 settings = settings,
                 highlights = highlights,
                 pageStart = pageStart,
+                startsMidParagraph = pageStart > 0 && content.getOrNull(pageStart - 1) != '\n',
                 percent = percent,
                 viewModel = viewModel,
                 uiDensity = uiDensity,
@@ -750,23 +727,30 @@ private fun PagedReader(
             }
 
             /**
-             * 地脚是**独立的底部条**，不属于页面内容。
-             *
-             * 它画在翻页动画层**之外**（是 Column 的第二个子项，不在上面那个
-             * Box 里），因此：
-             *   - 位置由结构保证：正文层 weight(1f) 吃掉剩余空间，它自然落在底部；
-             *   - 不参与翻页变换：页码与电量在翻页过程中稳定，不会跟着页面滑走。
-             *
-             * 之前它是 `ReaderPage` 的最后一个子项，位置取决于
-             * 「正文 Box 的 weight(1f) 分到多少高度」这一隐式推算 ——
-             * 正文区一旦被压成 0 高，地脚就顶到了屏幕最上面
-             * （用户截图里 app 的电池图标与系统电池图标并排在状态栏上）。
+             * 全书进度细线贴的是**正文层的下缘**，所以它必须留在上面这个 Box 里。
              */
-            PageFooterBar(
-                pageNumber = pageNumber,
-                settings = settings,
-            )
         }
+
+        /**
+         * 地脚是**独立的底部条**，是 Column 的第二个子项，不在正文层里。
+         *
+         * ## 上一版错在哪（用户报的「电池还在原位顶部」）
+         *
+         * 注释写着「它是 Column 的第二个子项」，代码却把它写在了正文那个
+         * `Box` **里面**。Box 的默认对齐是 TopStart —— 于是页码、时间、
+         * 电量被画到了屏幕**最顶端**，与系统状态栏的电池图标并排；
+         * 又因为 `.height(26.dp)` 写在 `.padding(bottom = safeBottom)` 之前，
+         * 手势条的安全区把那 26dp 整个吃掉，文字被挤出行外、只露出半截。
+         *
+         * 现在位置由结构保证：
+         *   - `weight(1f)` 的正文层先吃掉剩余空间，地脚自然落在底部；
+         *   - 它不在翻页动画层里，翻页时页码与电量稳定不动；
+         *   - 正文层实测到的高度**天然不含地脚**，分页口径与视觉一致。
+         */
+        PageFooterBar(
+            pageNumber = pageNumber,
+            settings = settings,
+        )
         }
     }
 }
@@ -780,12 +764,8 @@ private fun PagedReader(
  * 以及截图里 **app 的电池图标与系统电池图标并排显示在状态栏上** ——
  * 说明地脚曾经被渲染到了屏幕顶部。
  *
- * 根因是它原先作为 `ReaderPage` 的最后一个子项，位置取决于
- * 「正文 Box 的 weight(1f) 到底分到多少高度」这一隐式推算。
- * 一旦正文区被压成 0 高，地脚就顶到了最上面。
- *
- * 现在把它做成**独立的画层**：由 `align(BottomCenter)` 直接钉在底部，
- * 与正文的高度无关。
+ * 现在它是 PagedReader 里 Column 的第二个子项：正文层 `weight(1f)` 先吃掉
+ * 剩余空间，它自然落在最下面。位置由**结构**保证，不靠任何高度推算。
  */
 @Composable
 private fun PageFooterBar(
@@ -800,14 +780,23 @@ private fun PageFooterBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            // 高度固定，不随内容变化：电量从 100% 变 99% 也不该让正文重排
-            .height(FOOTER_HEIGHT)
-            // 横向页边距与正文一致，页码才会与正文左边界对齐
+            /**
+             * 修饰符顺序在这里是**功能性**的，不能随手调换。
+             *
+             * `padding` 必须写在 `height` **之前**（也就是更外层）：
+             *   - 先 padding：手势条的安全区加在 26dp 之外，整条地脚高
+             *     `safeBottom + 26dp`，文字稳稳落在安全区之上；
+             *   - 先 height：26dp 被当成「含 padding 的总高」，安全区一扣，
+             *     留给文字的高度就接近 0 —— 文字被挤出容器、只露半截，
+             *     正是用户看到的现象。
+             */
             .padding(
                 start = settings.marginDp.dp,
                 end = settings.marginDp.dp,
                 bottom = maxOf(6.dp, safeBottom),
-            ),
+            )
+            // 高度固定，不随内容变化：电量从 100% 变 99% 也不该让正文重排
+            .height(FOOTER_HEIGHT),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (settings.showPageNumber) {
@@ -835,82 +824,6 @@ private fun PageFooterBar(
         }
     }
 }
-/**
- * 把「渲染文本里的下标」换算回「章内字符偏移」。
- *
- * ## 为什么不能直接 `pageStart + offset`
- *
- * [buildPageText] 在渲染时会**插入内容**：每段首加全角缩进、段落之间补空行。
- * 于是渲染文本比源文本长，两者的下标不是一一对应 ——
- * 直接相加会随段数累积漂移，越往后偏得越多。
- * 用户长按一句想划线，结果划到的是别处。
- *
- * 这里不靠估算，而是**重新走一遍与 buildPageText 相同的拼接过程**，
- * 同时记录每个渲染下标对应的源下标。规则只有一处（两处必须同步修改），
- * 但因为用的是同一套拼接顺序，结果与渲染完全一致。
- *
- * @param pageText    这一页的源文本切片（章内 `[pageStart, pageEnd)`）
- * @param pageStart   这一页在章内的起始偏移
- * @param settings    排版设置（缩进与段间距会影响插入量）
- * @param renderOffset 渲染文本里的下标（来自 TextLayoutResult）
- * @return 章内字符偏移；越界时返回 null
- */
-private fun renderOffsetToChapterOffset(
-    pageText: String,
-    pageStart: Int,
-    settings: com.moyu.reader.data.prefs.ReaderSettings,
-    renderOffset: Int,
-): Int? {
-    if (renderOffset < 0) return null
-
-    val indentLen = if (settings.indentEm > 0f) {
-        settings.indentEm.toInt().coerceIn(0, 4)
-    } else {
-        0
-    }
-    val paragraphBreaks = settings.paragraphSpacingMultiplier
-        .coerceIn(0.5f, 3f)
-        .toInt()
-        .coerceAtLeast(1)
-
-    var render = 0
-    var cursor = pageStart
-    var firstEmitted = true
-
-    for (rawLine in pageText.split('\n')) {
-        val line = rawLine.trimStart()
-        val leading = rawLine.length - line.length
-        val sourceLineStart = cursor + leading
-
-        if (line.isNotEmpty()) {
-            if (!firstEmitted) {
-                // 段落之间的空行：落在这些换行上就归到本段开头
-                if (renderOffset < render + paragraphBreaks) return sourceLineStart
-                render += paragraphBreaks
-            }
-            firstEmitted = false
-
-            // 缩进：落在缩进上就归到本段开头
-            if (indentLen > 0) {
-                if (renderOffset < render + indentLen) return sourceLineStart
-                render += indentLen
-            }
-
-            // 正文：落在这一段内，就是精确对应
-            val lineEnd = render + line.length
-            if (renderOffset < lineEnd) {
-                return sourceLineStart + (renderOffset - render)
-            }
-            render = lineEnd
-        }
-
-        cursor += rawLine.length + 1
-    }
-
-    // 落在文本末尾（长按最后一行的空白区）时归到最后一个字符
-    return (pageStart + pageText.length - 1).takeIf { it >= pageStart }
-}
-
 /**
  * 翻页动画的几何量。
  *
@@ -1000,6 +913,13 @@ private fun ReaderPage(
     settings: com.moyu.reader.data.prefs.ReaderSettings,
     highlights: List<IntRange>,
     pageStart: Int,
+    /**
+     * 这一页是否从某一段的中间开始。
+     *
+     * 由 PagedReader 用「整章正文」判断（要看页边界前一个字符是不是换行），
+     * ReaderPage 本身只拿到切片，判断不了。
+     */
+    startsMidParagraph: Boolean,
     percent: Float,
     viewModel: ReaderViewModel,
     uiDensity: androidx.compose.ui.unit.Density,
@@ -1069,134 +989,73 @@ private fun ReaderPage(
                 ),
         ) {
             /**
-             * 这里**不再包 SelectionContainer**。
+             * 正文层：普通 `Text` + 自研选区手势。
              *
-             * 正文改用 `BasicTextField(readOnly = true)` 之后，选区已由它自己
-             * 实现（原生长按选词 + 拖拽手柄）。外面再套一层 SelectionContainer
-             * 会出现两个选区系统：手柄能拖，但拖出来的区间不一定被我们收到，
-             * 表现为「能选却弹不出标注条」。
+             * ## 为什么正文被换成了普通 `Text`
+             *
+             * 用户明确要求删掉长按选词。删掉之后正文不需要任何手势，
+             * 于是它也不该再挂手势处理器 —— 这里曾经挂过 `SelectionContainer`
+             * 与 `BasicTextField`，两者都会抢走整条手势流，和「正文要能滚动」
+             * 是互斥的：谁先消费事件，另一个就再也收不到。
              */
             Column(modifier = Modifier.fillMaxSize()) {
-                    if (showTitle) {
-                        // 标题块单独测量：首页要按它扣掉几行，其余页不扣。
-                        // 间距用 Spacer 而不是 padding，这样测到的高度
-                        // 就是实际占用的高度（padding 会让测量值与占位不一致）。
-                        Column(
-                            modifier = Modifier.onSizeChanged { size ->
-                                viewModel.setFirstPageHeaderHeight(size.height, uiDensity)
-                            },
-                        ) {
-                            Text(
-                                text = chapterNumberLabel,
-                                style = furnitureStyle,
-                                color = palette.textSecondary,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = chapterTitle,
-                                style = MaterialTheme.typography.headlineSmall.copy(
-                                    fontFamily = fontFamilyFor(settings.fontFamily),
-                                ),
-                                color = palette.text,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Spacer(Modifier.height(14.dp))
-                        }
-                    }
-                    /**
-                     * 正文。长按选词 → 弹出标注操作条。
-                     *
-                     * ## 为什么用 BasicTextField 而不是 Text + SelectionContainer
-                     *
-                     * 前一版是在 `SelectionContainer { Text(onLongPress…) }` 上挂手势，
-                     * 真机上**长按毫无反应**。原因是 SelectionContainer 自己就抢占了
-                     * 长按手势 —— 它的职责正是「长按选词」，于是挂在 Text 上的
-                     * `detectTapGestures` 收不到事件。靠叠加手势去和它抢是行不通的。
-                     *
-                     * `BasicTextField(readOnly = true)` 是阅读类应用的标准做法：
-                     * 它有**原生**的长按选词、拖拽手柄、双击选词，全部由系统实现，
-                     * 不需要我们重造。选中区间通过 onValueChange 的 TextFieldValue
-                     * 拿到，再换算成章内偏移交给 ViewModel。
-                     *
-                     * 关掉系统自带的复制/全选浮层：应用已经有自己的标注操作条
-                     * （划线 / 写笔记 / 复制 / 查词），两个浮层同时弹出会互相遮挡。
-                     */
-                    /**
-                     * 选区由自己在 remember 里保持。
-                     *
-                     * 关键点：**不能**每次重组都把 selection 重建成 Zero ——
-                     * 那会在用户拖手柄的过程中把选区重置掉。
-                     * 只在翻页（text / pageStart 变化）时清空。
-                     */
-                    var fieldValue by remember(text, pageStart) {
-                        mutableStateOf(
-                            androidx.compose.ui.text.input.TextFieldValue(
-                                annotatedString = buildPageText(text, settings, highlights, pageStart),
-                                selection = androidx.compose.ui.text.TextRange.Zero,
-                            )
-                        )
-                    }
-
-                    // 排版设置变化时要更新渲染文本，但保留当前选区
-                    val rendered = buildPageText(text, settings, highlights, pageStart)
-                    if (rendered != fieldValue.annotatedString) {
-                        fieldValue = fieldValue.copy(annotatedString = rendered)
-                    }
-
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = fieldValue,
-                        onValueChange = { new ->
-                            fieldValue = new
-                            // readOnly 下文本不会变，onValueChange 只在选区变化时触发
-                            val sel = new.selection
-                            if (!sel.collapsed) {
-                                val from = com.moyu.reader.reader.PageTextComposer
-                                    .renderOffsetToChapterOffset(
-                                        pageText = text,
-                                        pageStart = pageStart,
-                                        indentEm = settings.indentEm,
-                                        paragraphSpacingMultiplier =
-                                        settings.paragraphSpacingMultiplier,
-                                        renderOffset = sel.min,
-                                    )
-                                val to = com.moyu.reader.reader.PageTextComposer
-                                    .renderOffsetToChapterOffset(
-                                        pageText = text,
-                                        pageStart = pageStart,
-                                        indentEm = settings.indentEm,
-                                        paragraphSpacingMultiplier =
-                                        settings.paragraphSpacingMultiplier,
-                                        renderOffset = sel.max,
-                                    )
-                                if (from != null && to != null && to > from) {
-                                    viewModel.setSelectionRange(from, to)
-                                }
-                            }
+                if (showTitle) {
+                    // 标题块单独测量：首页要按它扣掉几行，其余页不扣。
+                    // 间距用 Spacer 而不是 padding，这样测到的高度
+                    // 就是实际占用的高度（padding 会让测量值与占位不一致）。
+                    Column(
+                        modifier = Modifier.onSizeChanged { size ->
+                            viewModel.setFirstPageHeaderHeight(size.height, uiDensity)
                         },
-                        readOnly = true,
-                        textStyle = bodyTextStyle(settings).copy(color = palette.text),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(
-                            androidx.compose.ui.graphics.Color.Transparent,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    ) {
+                        Text(
+                            text = chapterNumberLabel,
+                            style = furnitureStyle,
+                            color = palette.textSecondary,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = chapterTitle,
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontFamily = fontFamilyFor(settings.fontFamily),
+                            ),
+                            color = palette.text,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(Modifier.height(14.dp))
+                    }
                 }
+                /**
+                 * 正文。
+                 *
+                 * ## 这里为什么只是一个普通 `Text`
+                 *
+                 * 用户明确要求**删掉长按选词**。删掉之后正文不需要任何手势，
+                 * 于是它也不该再挂任何手势处理器 —— 这一层曾经挂过
+                 * `SelectionContainer` 与 `BasicTextField`，两者都会抢走整条
+                 * 手势流，和「正文要能滚动」是互斥的：谁先消费事件，
+                 * 另一个就再也收不到。这正是「滚动模式完全滚不动」的来源。
+                 *
+                 * 现在正文自身不带手势：点击翻页、横向滑动翻页、
+                 * 纵向拖动滚动，全部由上层那张干净的手势网处理。
+                 *
+                 * 还需要选中文字的话，回到阅读器工具栏里的复制入口即可。
+                 */
+                Text(
+                    text = buildPageText(
+                        pageText = text,
+                        settings = settings,
+                        highlights = highlights,
+                        pageStart = pageStart,
+                        startsMidParagraph = startsMidParagraph,
+                    ),
+                    style = bodyTextStyle(settings).copy(color = palette.text),
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
-
-        // 地脚**不在这里**。
-        //
-        // 它已改为独立的底部条（见 PageFooterBar），由 PagedReader 用
-        // `align(BottomCenter)` 钉在阅读区底端。
-        //
-        // 原先它是这个 Column 的最后一个子项，位置取决于
-        // 「正文 Box 的 weight(1f) 分到多少高度」这一隐式推算 ——
-        // 正文区一旦被压成 0 高，地脚就顶到了屏幕最上面
-        // （用户截图里 app 的电池图标与系统电池图标并排在状态栏上）。
-        //
-        // 另外，分页测量不再把地脚高度算进 contentHeight ——
-        // 它已经是独立的一层，与版心无关。
-        }
+    }
+}
 
 /** 地脚高度。两页必须一致，否则翻页时地脚会跳。 */
 private val FOOTER_HEIGHT = 26.dp
@@ -1240,20 +1099,22 @@ private fun buildPageText(
     settings: com.moyu.reader.data.prefs.ReaderSettings,
     highlights: List<IntRange>,
     pageStart: Int,
+    /** 这一页是否从某段中间开始（是则首行不加缩进，见 PageTextComposer.layoutOf） */
+    startsMidParagraph: Boolean = false,
 ): androidx.compose.ui.text.AnnotatedString {
     /**
-     * 排版布局来自 [PageTextComposer.layoutOf] —— 与长按取词的下标换算
-     * **共用同一个实现**。
+     * 排版布局来自 [PageTextComposer.layoutOf]。
      *
      * 这一点很关键：早先这里自己写了一遍拼接（插缩进、补空行），
-     * 而长按处按「页起始 + 渲染下标」估算源位置 —— 两套规则必然漂移，
-     * 表现为「长按划线的位置越往后越偏」。现在只有一处规则。
+     * 而别处又按「页起始 + 渲染下标」估算源位置 —— 两套规则必然漂移。
+     * 现在拼接与换算只有一处规则。
      */
     val layout = com.moyu.reader.reader.PageTextComposer.layoutOf(
         pageText = pageText,
         pageStart = pageStart,
         indentEm = settings.indentEm,
         paragraphSpacingMultiplier = settings.paragraphSpacingMultiplier,
+        startsMidParagraph = startsMidParagraph,
     )
 
     val indent = if (layout.indentLength > 0) "\u3000".repeat(layout.indentLength) else ""
@@ -1261,7 +1122,9 @@ private fun buildPageText(
 
     layout.lines.forEachIndexed { index, span ->
         if (index > 0) repeat(layout.paragraphBreaks) { builder.append("\n") }
-        if (indent.isNotEmpty()) builder.append(indent)
+        // 与 PageTextComposer.render 保持同一条规则：首段若从段中间开始，
+        // renderStart 就是 0，不加缩进。两处一旦不一致，渲染就比量出来的长。
+        if (indent.isNotEmpty() && span.renderStart > 0) builder.append(indent)
 
         val contentStart = builder.length
         builder.append(span.text)
@@ -1283,6 +1146,7 @@ private fun buildPageText(
     }
     return builder.toAnnotatedString()
 }
+
 
 /**
  * 正文文本样式。分页计算与实际渲染必须用同一套参数。
@@ -1361,6 +1225,8 @@ private fun bodyTextStyle(settings: com.moyu.reader.data.prefs.ReaderSettings): 
 @Composable
 private fun ScrollReader(
     content: String,
+    chapterTitle: String,
+    chapterNumberLabel: String,
     highlights: List<IntRange>,
     settings: com.moyu.reader.data.prefs.ReaderSettings,
     /** 取版心实测高度用 —— 自动滚动的速度必须与分页模式同口径。 */
@@ -1374,6 +1240,37 @@ private fun ScrollReader(
     val scrollState = rememberScrollState()
     val safeTop = com.moyu.reader.ui.safeTop
     val safeBottom = com.moyu.reader.ui.safeBottom
+
+    /**
+     * 恢复上次读到的位置。
+     *
+     * 滚动模式没有「页」，位置只能按比例恢复：上次读到的章内偏移 / 本章长度。
+     * 不做这件事的话，用户滚着读了半章，退出再进来会回到章首 ——
+     * 而页码却显示着他已经读到的地方，两边对不上。
+     */
+    LaunchedEffect(content, scrollState.maxValue) {
+        if (scrollState.maxValue <= 0) return@LaunchedEffect
+        val target = (viewModel.scrollStartFraction() * scrollState.maxValue).toInt()
+        if (target > 0) scrollState.scrollTo(target)
+    }
+
+    /**
+     * 把滚动位置折算成章内偏移上报给 ViewModel。
+     *
+     * 只在「滚过约两行」时才上报：逐帧上报会让 ViewModel 每帧改一次
+     * StateFlow，阅读页跟着重组，滚动反而变卡。落后两行的进度
+     * 对持久化来说完全够用。
+     */
+    LaunchedEffect(content) {
+        var lastReported = -1000
+        androidx.compose.runtime.snapshotFlow { scrollState.value }.collect { value ->
+            if (scrollState.maxValue <= 0) return@collect
+            if (kotlin.math.abs(value - lastReported) < 160) return@collect
+            lastReported = value
+            val offset = (value.toFloat() / scrollState.maxValue * content.length).toInt()
+            viewModel.setScrollChapterOffset(offset.coerceIn(0, (content.length - 1).coerceAtLeast(0)))
+        }
+    }
 
     // 滚动容器的可视高度。自动阅读每次推进「一屏」，因此需要它。
     // 用 BoxWithConstraints 而不是 onSizeChanged：后者要么多一个 state、
@@ -1457,83 +1354,63 @@ private fun ScrollReader(
             }
         }
 
-        /**
-         * 正文：用 `BasicTextField(readOnly = true)` 而不是
-         * `SelectionContainer { Text }`。
-         *
-         * ## 这是「滚动完全动不了」的根因
-         *
-         * `SelectionContainer` 会**消费拖拽手势** —— 它的职责之一就是
-         * 「长按选字后拖动扩选」。于是用户想上下滑动时，手势在到达
-         * `verticalScroll` 之前就被它吃掉了，页面纹丝不动。
-         *
-         * 分页模式早就踩过同一个坑（那里表现为长按无反应），当时改成了
-         * `BasicTextField`；滚动模式这一处漏了，于是滚动直接失效。
-         *
-         * `BasicTextField(readOnly = true)` 由系统实现选区，
-         * 选区手势与滚动手势由框架正确区分：短按拖动=滚动，
-         * 长按后拖动=扩选。两端行为一致，也不需要维护两套选区代码。
-         */
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                // 滚动模式同样要让开系统栏：否则首行压状态栏、末行压手势条。
-                // 纵向取「页边距」与「安全区」的较大值，与分页模式口径一致。
-                // 横向页边距由外层 BoxWithConstraints 统一加（只加一次，
-                // 两处都加会让版心窄掉一半）。
+                /**
+                 * 纵向留白取「页边距」与「安全区」的较大值。
+                 *
+                 * 注意这两条 padding 写在 `verticalScroll` **之后**，
+                 * 也就是它们属于**滚动内容**的一部分：
+                 *   - 顶部留白会随内容一起滚走，不会永远占着一条空白；
+                 *   - 底部留白在滚到底时把最后一行托在手势条**之上** ——
+                 *     这正是用户报的「滚动底部手势条的保护没了」那一条。
+                 *
+                 * 若把 padding 写在 `verticalScroll` 之前，它就成了容器的内边距：
+                 * 内容会从留白下面穿过去，最后一行永远压在系统手势条上。
+                 *
+                 * 横向页边距由外层 BoxWithConstraints 统一加（只加一次，
+                 * 两处都加会让版心窄掉一半）。
+                 */
                 .padding(
                     top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
                     bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
                 ),
         ) {
-            var fieldValue by remember(content, settings.fontSizeSp) {
-                mutableStateOf(
-                    androidx.compose.ui.text.input.TextFieldValue(
-                        annotatedString = buildPageText(content, settings, highlights, 0),
-                        selection = androidx.compose.ui.text.TextRange.Zero,
-                    )
+            /**
+             * 章首那一行标题。
+             *
+             * 分章时标题行被保留在正文里（重切要能无损拼回全文），
+             * 所以滚动模式下要么把它当正文首段（缩进两格、和普通段落一样），
+             * 要么当标题排版 —— 后者才是书的体例。这里按标题排，
+             * 同时把它从正文里去掉，避免同一句话出现两次。
+             */
+            val headingSkip = com.moyu.reader.reader.ChapterSplitter
+                .headingSkipLength(content, chapterTitle)
+            val body = if (headingSkip > 0) content.substring(headingSkip) else content
+
+            if (headingSkip > 0 && chapterTitle.isNotBlank()) {
+                Text(
+                    text = chapterNumberLabel,
+                    style = furnitureStyle(settings),
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                Text(
+                    text = chapterTitle,
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontFamily = fontFamilyFor(settings.fontFamily),
+                    ),
+                    color = palette.text,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(bottom = 14.dp),
                 )
             }
-            val rendered = buildPageText(content, settings, highlights, 0)
-            if (rendered != fieldValue.annotatedString) {
-                fieldValue = fieldValue.copy(annotatedString = rendered)
-            }
 
-            androidx.compose.foundation.text.BasicTextField(
-                value = fieldValue,
-                onValueChange = { new ->
-                    fieldValue = new
-                    val sel = new.selection
-                    if (!sel.collapsed) {
-                        // 滚动模式没有「页起始」，整章从 0 开始，
-                        // 因此渲染下标直接减去缩进/空行的漂移即可
-                        val from = com.moyu.reader.reader.PageTextComposer
-                            .renderOffsetToChapterOffset(
-                                pageText = content,
-                                pageStart = 0,
-                                indentEm = settings.indentEm,
-                                paragraphSpacingMultiplier = settings.paragraphSpacingMultiplier,
-                                renderOffset = sel.min,
-                            )
-                        val to = com.moyu.reader.reader.PageTextComposer
-                            .renderOffsetToChapterOffset(
-                                pageText = content,
-                                pageStart = 0,
-                                indentEm = settings.indentEm,
-                                paragraphSpacingMultiplier = settings.paragraphSpacingMultiplier,
-                                renderOffset = sel.max,
-                            )
-                        if (from != null && to != null && to > from) {
-                            viewModel.setSelectionRange(from, to)
-                        }
-                    }
-                },
-                readOnly = true,
-                textStyle = bodyTextStyle(settings).copy(color = palette.text),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(
-                    androidx.compose.ui.graphics.Color.Transparent,
-                ),
+            Text(
+                text = buildPageText(body, settings, highlights, headingSkip),
+                style = bodyTextStyle(settings).copy(color = palette.text),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1629,5 +1506,5 @@ private fun viewModelPercent(
 
 private fun copyToClipboard(context: android.content.Context, text: String) {
     val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Reader", text))
+    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("墨鱼阅读", text))
 }

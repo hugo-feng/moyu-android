@@ -30,6 +30,32 @@ import com.moyu.reader.ui.theme.paletteFor
  */
 class MainActivity : ComponentActivity() {
 
+    /**
+     * 音量键翻页的**唯一接线点**。
+     *
+     * ## 为什么必须做在 Activity 而不是 Compose 里
+     *
+     * 「音量键翻页」这个开关在设置里存在很久了，但全项目没有任何按键处理 ——
+     * 存了、读了、显示了，就是没人接：用户打开它，按音量键只会调音量。
+     *
+     * Compose 的 `onKeyEvent` 要靠焦点，阅读页里焦点随时可能落在别处
+     * （工具栏按钮、面板输入框），音量键会在到达它之前被系统处理掉。
+     * 而 `Activity.onKeyDown` 是所有按键的必经之路，最可靠。
+     *
+     * 阅读器进入时注册、退出时注销：只有阅读页开着，音量键才是翻页键。
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        val handler = VolumeKeyRouter.handler
+        if (handler != null) {
+            when (keyCode) {
+                android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> if (handler(true)) return true
+                android.view.KeyEvent.KEYCODE_VOLUME_UP -> if (handler(false)) return true
+                else -> Unit
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -64,3 +90,17 @@ class MainActivity : ComponentActivity() {
 
 /** 供 Compose 预览使用的一组默认设置。 */
 internal val PreviewSettings = ReaderSettings()
+
+/**
+ * 音量键的去处。
+ *
+ * 阅读页打开时注册一个处理器：参数是「是否音量减键」，返回 true 表示
+ * 这次按键已经被消费（翻页了），false 表示照旧调音量。
+ *
+ * 做成一个全局的单点路由，是因为按键的第一个入口是 Activity，
+ * 而「现在该不该翻页」只有阅读页知道（设置开关 + 是否有面板打开）。
+ */
+object VolumeKeyRouter {
+    /** @return true 表示已消费这次按键 */
+    var handler: ((volumeDown: Boolean) -> Boolean)? = null
+}

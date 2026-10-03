@@ -483,9 +483,23 @@ class SettingsViewModel(container: AppContainer) : MoyuViewModel(container) {
             // 章节、书签、笔记、会话，避免留下孤儿数据。
             val books = bookRepo.getAllBooksOnce()
             books.forEach { bookRepo.deleteBook(it.id) }
+
+            /**
+             * 分组与用户词典不在书籍的 CASCADE 链上，必须显式清。
+             *
+             * 之前漏了这两张表：用户点「清除全部数据」之后，书架页上
+             * 仍然留着自己建的分组卡片，点进去是空的 —— 看起来就是没清干净。
+             * 先清掉书上的 group_id 引用再删分组，避免出现悬空引用。
+             */
+            runCatching {
+                container.database.bookGroupDao().clearAllGroupRefs()
+                container.database.bookGroupDao().clearAll()
+                container.database.userDictionaryDao().clearAll()
+            }
+
             statsClear()
             store.resetToDefaults()
-            _message.value = "已清除全部数据"
+            _message.value = "已清除全部数据：书籍、进度、书签、分组与设置都已还原"
         }
     }
 

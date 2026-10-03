@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moyu.reader.data.model.BookFormat
+import com.moyu.reader.data.model.displayName
 import com.moyu.reader.data.model.ReadingStatus
 import com.moyu.reader.data.repository.BookRepository
 import com.moyu.reader.ui.ShelfViewModel
@@ -78,9 +81,12 @@ fun BookDetailScreen(
     factory: com.moyu.reader.ui.MoyuViewModelFactory,
     bookId: String,
     onBack: () -> Unit,
-    onRead: (String) -> Unit,
-    onOpenToc: (String) -> Unit,
-    onOpenNotes: (String) -> Unit,
+    /** 开始/继续阅读；restart = true 表示「重新阅读」，要从第一章开头读起 */
+    onRead: (bookId: String, restart: Boolean) -> Unit,
+    /** 点目录里的某一章：直接进阅读器并定位到那一章 */
+    onOpenChapter: (bookId: String, chapterIndex: Int) -> Unit,
+    /** 本书书签（笔记功能已删除，只保留书签） */
+    onOpenBookmarks: (String) -> Unit,
 ) {
     val viewModel: ShelfViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
     val items by viewModel.items.collectAsStateWithLifecycle()
@@ -170,13 +176,7 @@ fun BookDetailScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = buildString {
-                        append(
-                            when (book.format) {
-                                BookFormat.TXT -> "TXT"
-                                BookFormat.EPUB -> "EPUB"
-                                BookFormat.PDF -> "PDF"
-                            }
-                        )
+                        append(book.format.displayName)
                         append(" · ")
                         append(
                             when {
@@ -204,7 +204,12 @@ fun BookDetailScreen(
             }
         }
 
-        // —— 主按钮：开始/继续阅读 ——
+        // —— 主按钮：开始/继续/重新阅读 ——
+        //
+        // 「重新阅读」必须真的从第一章开头开始。之前三个文案走的是同一条路径，
+        // 阅读器一律读数据库里的上次位置 —— 点「重新阅读」跟「继续阅读」
+        // 一模一样，用户以为按钮坏了（审计里也是这么记的）。
+        val restart = item!!.finished
         Box(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
             MoyuPrimaryButton(
                 text = when {
@@ -213,7 +218,7 @@ fun BookDetailScreen(
                     else -> "继续阅读"
                 },
                 icon = Icons.Filled.PlayArrow,
-                onClick = { onRead(bookId) },
+                onClick = { onRead(bookId, restart) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -231,9 +236,9 @@ fun BookDetailScreen(
                 onClick = { viewModel.toggleInShelf(book) },
             )
             MoyuTextButton(
-                text = "笔记",
-                icon = Icons.Filled.Bookmark,
-                onClick = { onOpenNotes(bookId) },
+                text = "书签",
+                icon = Icons.Filled.Bookmarks,
+                onClick = { onOpenBookmarks(bookId) },
             )
             MoyuTextButton(
                 text = "删除",
@@ -268,9 +273,13 @@ fun BookDetailScreen(
 
         // —— 目录 ——
         //
-        // 番茄详情页在这里放的是「目录 共 N 章」并可展开。
-        // 这里只给一个入口 + 前几章预览：完整目录在阅读器里更好用
-        // （那里能配合阅读位置高亮当前章）。
+        // 番茄详情页在这里放的就是一条**可滑动的目录列表**（用户的原话：
+        // 「他的目录不是这样的，是可滑动的列表来的」）。
+        // 之前只给前 5 章 + 一个「查看全部」按钮，等于把目录藏在二级页里，
+        // 想跳章还得先跳进阅读器再开目录。
+        //
+        // 这里给固定高度（而不是 heightIn）：LazyColumn 在无限高约束下
+        // 无法测量，嵌在可滚动页面里必须有一个确定的高度。
         DetailSection(title = "目录", trailing = "共 ${tree.size} 章") {
             if (tree.isEmpty()) {
                 Text(
@@ -279,20 +288,36 @@ fun BookDetailScreen(
                     color = palette.textSecondary,
                 )
             } else {
-                tree.take(5).forEach { node ->
-                    Text(
-                        text = node.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(vertical = 5.dp),
-                    )
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(272.dp),
+                ) {
+                    itemsIndexed(tree) { index, node ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenChapter(bookId, index) }
+                                .padding(vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                                modifier = Modifier.width(30.dp),
+                            )
+                            Text(
+                                text = node.title,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.text,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
                 }
-                MoyuTextButton(
-                    text = if (tree.size > 5) "查看全部 ${tree.size} 章" else "打开目录",
-                    onClick = { onOpenToc(bookId) },
-                )
             }
         }
 

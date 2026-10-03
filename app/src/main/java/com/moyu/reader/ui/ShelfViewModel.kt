@@ -136,6 +136,14 @@ class ShelfViewModel(container: com.moyu.reader.data.AppContainer) : MoyuViewMod
         // 同一本书不重复加载：LaunchedEffect 在重组时可能再次触发
         if (tocLoadedFor == bookId) return
         tocLoadedFor = bookId
+        /**
+         * 先把「旧规则切出来的章节」重切一遍，再读目录。
+         *
+         * 这一步原先只在阅读器里做（`ReaderViewModel.open`），于是详情页
+         * 显示的还是旧的十几个「第 N 节」—— 用户升级后打开详情页看到目录没变，
+         * 自然认为修复没生效。同一个检查放在这里，两处入口才能一致。
+         */
+        runCatching { bookRepo.resplitIfOutdated(bookId) }
         _tocTree.value = runCatching { bookRepo.getChapterHeaders(bookId) }.getOrDefault(emptyList())
     }
 

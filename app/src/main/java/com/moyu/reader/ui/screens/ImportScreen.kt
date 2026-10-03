@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +63,8 @@ import com.moyu.reader.ui.theme.moyuPalette
 fun ImportScreen(
     factory: MoyuViewModelFactory,
     onBack: () -> Unit,
+    /** 导入完成后直接去读这本书 —— 少了这一步，导入流程是断的。 */
+    onOpenBook: (String) -> Unit,
 ) {
     val viewModel: ShelfViewModel = viewModel(factory = factory)
     val importing by viewModel.importing.collectAsStateWithLifecycle()
@@ -189,6 +192,47 @@ fun ImportScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
 
+                /**
+                 * 导入完成后的去向。
+                 *
+                 * 之前这里只有一份结果列表，**没有任何「去读书」的入口** ——
+                 * 用户导入完只能自己返回书库、点开书、进详情页、再点开始阅读，
+                 * 四步跳转里少了三步。刚导入的那本书就在手边，直接给按钮。
+                 *
+                 * 取**最后一本成功导入**的书：批量导入时用户最新关心的就是它。
+                 */
+                val lastImported = results.filterIsInstance<ImportResult.Success>().lastOrNull()
+                if (!importing && lastImported != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        MoyuPrimaryButton(
+                            text = "开始阅读《${lastImported.title}》",
+                            icon = Icons.Filled.PlayArrow,
+                            onClick = { onOpenBook(lastImported.bookId) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
+                /**
+                 * 汇总提示（「已导入 N 本…」这类）。
+                 *
+                 * ViewModel 早就在写这条消息，但界面从来没渲染过它 ——
+                 * 状态白白算了一遍，用户什么也看不到。
+                 */
+                message?.let { text ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.primary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
+
                 results.forEach { result ->
                     ImportResultRow(result)
                 }
@@ -204,9 +248,11 @@ fun ImportScreen(
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(Modifier.height(8.dp))
-                BulletText("TXT：自动识别 UTF-8 / GB18030 / UTF-16 编码，并按章节标题自动分章。")
-                BulletText("EPUB：读取目录与正文，自动提取封面。")
-                BulletText("PDF：作为整页文档保存记录，不提取文字（PDF 没有重排概念）。")
+                BulletText("文本（.txt）：自动识别 UTF-8 / GB18030 / Big5 / UTF-16 编码，并按章节标题自动分章。")
+                BulletText("电子书（.epub）：读取目录与正文，自动提取封面。")
+                // 如实描述：PDF 目前只建书目记录，不能翻页阅读（渲染尚未实现）。
+                // 不能写成「可在阅读器里逐页查看」—— 那是谎报功能。
+                BulletText("PDF 文档（.pdf）：当前只保存书目记录，暂不支持翻页阅读。")
                 Spacer(Modifier.height(14.dp))
                 Text(
                     text = "所有文件都从你授权的目录读取，应用不会主动扫描设备存储。",

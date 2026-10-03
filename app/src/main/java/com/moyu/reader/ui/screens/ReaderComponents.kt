@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import com.moyu.reader.ui.theme.moyuPalette
 
@@ -37,6 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -201,15 +202,32 @@ fun ReaderBottomBar(
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.textSecondary,
             )
-            Slider(
-                value = dragValue,
-                onValueChange = { dragValue = it },
-                onValueChangeFinished = { onChapterSeek(dragValue.toInt()) },
-                valueRange = 0f..(chapterCount - 1).coerceAtLeast(0).toFloat(),
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 10.dp),
-            )
+        /**
+         * 章节进度条。
+         *
+         * `valueRange` 必须保证 **start < end**：只有一章的书里
+         * `chapterCount - 1 == 0`，区间会退化成 `0f..0f`，
+         * Compose 的 Slider 会直接抛 IllegalArgumentException 崩溃
+         * （读一篇完整的短篇就会踩到，是最容易发生的那种崩溃）。
+         * 这里给一个恒定的 0f..1f，单章时它自然只是一条不可拖的满格条。
+         */
+        val chapterRange = if (chapterCount > 1) {
+            0f..(chapterCount - 1).toFloat()
+        } else {
+            0f..1f
+        }
+        Slider(
+            value = dragValue.coerceIn(chapterRange.start, chapterRange.endInclusive),
+            onValueChange = { dragValue = it },
+            onValueChangeFinished = {
+                if (chapterCount > 1) onChapterSeek(dragValue.toInt())
+            },
+            valueRange = chapterRange,
+            enabled = chapterCount > 1,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 10.dp),
+        )
         }
 
         Row(
@@ -586,11 +604,28 @@ fun TypographySheet(
                 onMinus = { viewModel.updateSettings { it.setLineHeight(settings.lineHeightMultiplier - 0.1f) } },
                 onPlus = { viewModel.updateSettings { it.setLineHeight(settings.lineHeightMultiplier + 0.1f) } },
             )
+            /**
+             * 段间距按「空行数」调，而不是按一个看不出效果的倍率。
+             *
+             * 渲染侧把段间距换算成「段落之间插几个换行」
+             * （见 PageTextComposer.paragraphBreakCount，倍率取整后至少 1）。
+             * 原先这里用 0.2 的步进调 0.5~1.9，取整后**全是 1 个空行** ——
+             * 用户连点七八次，屏幕上一个像素都不动，看起来就是坏的。
+             * 现在直接把「空行数」摆出来，按一下必然变一行。
+             */
             StepperRow(
                 label = "段间距",
-                value = String.format("%.1f", settings.paragraphSpacingMultiplier),
-                onMinus = { viewModel.updateSettings { it.setParagraphSpacing(settings.paragraphSpacingMultiplier - 0.2f) } },
-                onPlus = { viewModel.updateSettings { it.setParagraphSpacing(settings.paragraphSpacingMultiplier + 0.2f) } },
+                value = "${settings.paragraphSpacingMultiplier.toInt().coerceIn(1, 3)} 个空行",
+                onMinus = {
+                    viewModel.updateSettings {
+                        it.setParagraphSpacing(settings.paragraphSpacingMultiplier.toInt().coerceAtLeast(1) - 1f)
+                    }
+                },
+                onPlus = {
+                    viewModel.updateSettings {
+                        it.setParagraphSpacing(settings.paragraphSpacingMultiplier.toInt().coerceAtMost(3) + 1f)
+                    }
+                },
             )
             StepperRow(
                 label = "页边距",
@@ -598,6 +633,60 @@ fun TypographySheet(
                 onMinus = { viewModel.updateSettings { it.setMargin(settings.marginDp - 2) } },
                 onPlus = { viewModel.updateSettings { it.setMargin(settings.marginDp + 2) } },
             )
+            /**
+             * 首行缩进 / 字距 / 加粗 / 两端对齐。
+             *
+             * 这四项以前**只有设置项与渲染读取，没有任何界面入口**
+             * （`SettingsStore` 里的 setter 全项目零调用点），
+             * 等于写死的默认值 —— 用户既看不到也改不了，属于「假功能」。
+             * 现在都放进这个面板：它们正是「边调边看」才调得准的东西。
+             */
+            StepperRow(
+                label = "首行缩进",
+                value = "${settings.indentEm.toInt()} 字",
+                onMinus = { viewModel.updateSettings { it.setIndent(settings.indentEm - 1f) } },
+                onPlus = { viewModel.updateSettings { it.setIndent(settings.indentEm + 1f) } },
+            )
+            StepperRow(
+                label = "字间距",
+                value = String.format("%.2f", settings.letterSpacingEm),
+                onMinus = { viewModel.updateSettings { it.setLetterSpacing(settings.letterSpacingEm - 0.01f) } },
+                onPlus = { viewModel.updateSettings { it.setLetterSpacing(settings.letterSpacingEm + 0.01f) } },
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "加粗正文",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.text,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = settings.bold,
+                    onCheckedChange = { on -> viewModel.updateSettings { it.setBold(on) } },
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "两端对齐",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.text,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = settings.justify,
+                    onCheckedChange = { on -> viewModel.updateSettings { it.setJustify(on) } },
+                )
+            }
 
             // ============ 三、翻页 ============
             SheetSection("翻页")

@@ -1,4 +1,4 @@
-﻿package com.moyu.reader.ui.screens
+package com.moyu.reader.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -56,6 +56,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.moyu.reader.data.model.Book
 import com.moyu.reader.data.model.BookFormat
+import com.moyu.reader.data.model.displayName
 import com.moyu.reader.data.prefs.ShelfLayout
 import com.moyu.reader.ui.MoyuViewModelFactory
 import com.moyu.reader.ui.ShelfGroup
@@ -392,6 +393,8 @@ fun ShelfScreen(
                     onClick = { onOpenBook(item.book.id) },
                     onNotes = { onOpenNotes(item.book.id) },
                     onToggleShelf = { onToggleShelf(item.book) },
+                    groups = groups,
+                    onAssignGroup = { gid -> viewModel.assignToGroup(item.book, gid) },
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                 )
             }
@@ -960,24 +963,77 @@ private fun BookGridCard(
 }
 
 /** 列表布局下的行。 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun BookListRow(
     item: com.moyu.reader.data.model.ShelfItem,
     onClick: () -> Unit,
     onNotes: () -> Unit,
     onToggleShelf: () -> Unit,
+    groups: List<com.moyu.reader.data.model.BookGroup> = emptyList(),
+    onAssignGroup: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(palette.card)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    var showGroupMenu by remember { mutableStateOf(false) }
+
+    /**
+     * 长按弹「移到分组」。
+     *
+     * 网格布局早就有这个入口，列表布局漏了 —— 而列表布局是用户可达状态
+     * （设置里有网格/列表切换），于是切到列表之后就**再也没有办法把书
+     * 放进分组**，功能等于消失。两个布局的入口必须成对存在。
+     */
+    Box(modifier = modifier) {
+        if (showGroupMenu) {
+            androidx.compose.material3.DropdownMenu(
+                expanded = true,
+                onDismissRequest = { showGroupMenu = false },
+            ) {
+                Text(
+                    text = "移到分组",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+                groups.forEach { g ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(g.name, style = MaterialTheme.typography.bodySmall) },
+                        onClick = {
+                            onAssignGroup(g.id)
+                            showGroupMenu = false
+                        },
+                    )
+                }
+                if (item.book.groupId != null) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = {
+                            Text(
+                                "移出分组",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFD9584A),
+                            )
+                        },
+                        onClick = {
+                            onAssignGroup(null)
+                            showGroupMenu = false
+                        },
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(palette.card)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { if (groups.isNotEmpty()) showGroupMenu = true },
+                )
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         BookCover(book = item.book, percent = item.percent, finished = item.finished, width = 50.dp)
         Column(
             modifier = Modifier
@@ -1034,11 +1090,12 @@ private fun BookListRow(
          * 加入书架改用 `BookmarkAdd` 风格的语义（书签 + 增删），
          * 这里保持纯书签图标；两者形状差异明显。
          */
-        IconAction(
-            icon = Icons.Filled.Bookmarks,
-            contentDescription = "本书书签",
-            onClick = onNotes,
-        )
+            IconAction(
+                icon = Icons.Filled.Bookmarks,
+                contentDescription = "本书书签",
+                onClick = onNotes,
+            )
+        }
     }
 }
 
@@ -1137,11 +1194,7 @@ fun BookCover(
                     .padding(start = 11.dp, top = 11.dp, end = 26.dp),
             )
             Text(
-                text = when (book.format) {
-                    BookFormat.TXT -> "TXT"
-                    BookFormat.EPUB -> "EPUB"
-                    BookFormat.PDF -> "PDF"
-                },
+                text = book.format.displayName,
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.85f),
                 modifier = Modifier

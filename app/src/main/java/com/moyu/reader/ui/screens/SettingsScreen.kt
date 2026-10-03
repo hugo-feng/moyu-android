@@ -78,7 +78,33 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val dictionaries by viewModel.dictionaries.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
     val palette = moyuPalette()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    /**
+     * 导入自定义词典。
+     *
+     * `SettingsViewModel.importDictionary` 早就写好了，但**从来没有任何调用点**
+     * —— 于是设置页里那一组「词典」永远只显示内置条数，用户词典列表永远是空的，
+     * 连「删除词典」按钮都不可能被点到。这里把它接上 SAF 选择器：
+     * 选一个文本文件（每行「词条 拼音 释义」），交给既有的解析与入库流程。
+     */
+    val dictionaryPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri: android.net.Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val name = uri.lastPathSegment?.substringAfterLast('/') ?: "自定义词典"
+            val text = context.contentResolver.openInputStream(uri)
+                ?.bufferedReader()
+                ?.use { it.readText() }
+                .orEmpty()
+            viewModel.importDictionary(name, text)
+        }.onFailure {
+            viewModel.importDictionary("", "")
+        }
+    }
 
     var confirmClear by remember { mutableStateOf(false) }
     /** 当前打开的二级页；null 表示停在一级分类列表。 */
@@ -191,7 +217,7 @@ fun SettingsScreen(
             )
             SettingDivider()
             SettingRow(
-                label = "Material You 动态取色",
+                label = "动态取色（跟随壁纸）",
                 hint = "Android 12+ 跟随壁纸取色（仅影响界面，不影响阅读页底色）",
                 trailing = {
                     MoyuSwitch(settings.dynamicColor) { viewModel.setDynamicColor(it) }
@@ -321,7 +347,7 @@ fun SettingsScreen(
 
             // ================= 朗读与词典 =================
             if (page == SettingsPage.SPEECH) {
-            GroupTitle("朗读（TTS）")
+            GroupTitle("朗读")
             SliderRow(
                 label = "语速",
                 valueText = String.format("%.1f×", settings.ttsRate),
@@ -350,6 +376,17 @@ fun SettingsScreen(
                         text = "${viewModel.builtinDictionarySize} 条",
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.textSecondary,
+                    )
+                },
+            )
+            SettingDivider()
+            SettingRow(
+                label = "导入自定义词典",
+                hint = "文本文件，每行「词条 拼音 释义」，用空格或制表符分隔",
+                trailing = {
+                    MoyuTextButton(
+                        text = "选择文件",
+                        onClick = { dictionaryPicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     )
                 },
             )
@@ -402,13 +439,30 @@ fun SettingsScreen(
                     MoyuTextButton(text = "取消", onClick = { confirmClear = false })
                 }
             }
+
+            /**
+             * 结果反馈。
+             *
+             * 之前 `SettingsViewModel.message` 里写了「已清除全部数据」，
+             * 但设置页从来不订阅它 —— 用户点了确认之后界面上没有任何变化，
+             * 无从判断到底清没清干净。这里把它显示出来。
+             */
+            message?.let { text ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
             }
 
             // ================= 关于 =================
             if (page == SettingsPage.ABOUT) {
             GroupTitle("关于")
             SettingRow(
-                label = "Reader · 本地阅读器",
+                label = "墨鱼阅读 · 本地阅读器",
                 hint = "版本 ${com.moyu.reader.BuildConfig.VERSION_NAME}",
             )
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {

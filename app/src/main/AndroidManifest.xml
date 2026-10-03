@@ -72,24 +72,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 支持「用其他应用打开」直接导入 txt / epub / pdf -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="text/plain" />
-                <data android:mimeType="application/epub+zip" />
-                <data android:mimeType="application/pdf" />
-            </intent-filter>
+            <!--
+                「用其他应用打开」「分享到本应用」这两个 intent-filter 已经删掉。
 
-            <!-- 支持从文件管理器「分享到 Reader」 -->
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-                <data android:mimeType="application/epub+zip" />
-                <data android:mimeType="application/pdf" />
-            </intent-filter>
+                原因：声明了却没有任何代码处理 —— MainActivity 从不读 getIntent()，
+                也没有 onNewIntent。从文件管理器点「用阅读器打开」会**只启动应用**、
+                文件被静默丢弃，看起来像功能坏了。
+
+                宁可先不声明，也不要留一个骗人的入口。等真正实现导入
+                （onCreate/onNewIntent 取 Uri → 走既有导入流程）之后再放回来。
+            -->
         </activity>
     </application>
 
