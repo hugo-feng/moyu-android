@@ -1249,7 +1249,29 @@ private fun ScrollReader(
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
             .fillMaxWidth()
-            .weight(1f),
+            .weight(1f)
+            /**
+             * 状态栏保护：视口从状态栏下方开始，滚上去的字在这里被裁掉。
+             *
+             * ## 为什么不能只靠内容里的一条 padding
+             *
+             * 之前顶部留白写在 `verticalScroll` **之后**（属于滚动内容），
+             * 于是它只在章首有效：一开始读，第一行确实在状态栏下面；
+             * 手一滑，那点留白跟着内容滚走了，文字就直接钻到状态栏底下，
+             * 与时钟、信号、电量叠在一起 —— 用户报的正是这个。
+             *
+             * 保护必须做在**视口**上：这两条修饰符写在滚动层外面，
+             *   - `padding(top = safeTop)` 把视口整体压到状态栏之下；
+             *   - `clipToBounds()` 让滚过界的文字在这个边界上被裁掉，
+             *     而不是继续画到状态栏上。
+             * 边界之外露出的是阅读页自己的底色（护眼色温也跟着生效），
+             * 所以看起来就是一条干净的安全带。
+             *
+             * 顺序不能反：先 padding 再 clip，裁切线才是「状态栏下沿」；
+             * 反过来裁切线会落在屏幕最顶端，等于没保护。
+             */
+            .padding(top = safeTop)
+            .clipToBounds(),
     ) {
     androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = Modifier
@@ -1335,38 +1357,39 @@ private fun ScrollReader(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 /**
-                 * 纵向留白取「页边距」与「安全区」的较大值。
+                 * 内容自身的留白。
                  *
-                 * 注意这两条 padding 写在 `verticalScroll` **之后**，
-                 * 也就是它们属于**滚动内容**的一部分：
-                 *   - 顶部留白会随内容一起滚走，不会永远占着一条空白；
-                 *   - 底部留白在滚到底时把最后一行托在手势条**之上** ——
-                 *     这正是用户报的「滚动底部手势条的保护没了」那一条。
+                 * 顶部只留一点点呼吸空间就够 —— 状态栏那一段已经由**视口**
+                 * 让开了（见外层 Box 的 padding + clipToBounds），
+                 * 这里若再算一次 safeTop，就变成「双重留白」，章首会空掉一大块。
                  *
-                 * 若把 padding 写在 `verticalScroll` 之前，它就成了容器的内边距：
-                 * 内容会从留白下面穿过去，最后一行永远压在系统手势条上。
-                 *
-                 * 横向页边距由外层 BoxWithConstraints 统一加（只加一次，
-                 * 两处都加会让版心窄掉一半）。
+                 * 底部留白必须留在这里（属于滚动内容）：滚到底时最后一行
+                 * 才会停到手势条之上，而不是被压在下面。
                  */
                 .padding(
-                    top = maxOf(settings.marginDp.dp * 0.9f, safeTop),
+                    top = 10.dp,
                     bottom = maxOf(settings.marginDp.dp * 0.9f, safeBottom),
                 ),
         ) {
             /**
-             * 章首那一行标题。
+             * 章首标题。
              *
              * 分章时标题行被保留在正文里（重切要能无损拼回全文），
              * 所以滚动模式下要么把它当正文首段（缩进两格、和普通段落一样），
              * 要么当标题排版 —— 后者才是书的体例。这里按标题排，
              * 同时把它从正文里去掉，避免同一句话出现两次。
+             *
+             * **无论正文首行是不是标题，标题都要画**：先前只在
+             * `headingSkip > 0` 时才画，于是兜底切块的书（标题形如「第 N 节」、
+             * 正文里没有对应行）在滚动模式下**完全看不到自己在第几章** ——
+             * 只能轻点屏幕把工具栏呼出来才知道。标题是阅读时的定位信息，
+             * 不该有时候有、有时候没有。
              */
             val headingSkip = com.moyu.reader.reader.ChapterSplitter
                 .headingSkipLength(content, chapterTitle)
             val body = if (headingSkip > 0) content.substring(headingSkip) else content
 
-            if (headingSkip > 0 && chapterTitle.isNotBlank()) {
+            if (chapterTitle.isNotBlank()) {
                 Text(
                     text = chapterNumberLabel,
                     style = furnitureStyle(settings),

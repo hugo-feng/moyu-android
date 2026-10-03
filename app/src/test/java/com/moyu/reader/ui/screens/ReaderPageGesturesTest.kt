@@ -134,6 +134,55 @@ class ReaderPageGesturesTest {
         assertTrue("点击位置应当被传出来", lastX >= 0f && width > 0)
     }
 
+    /**
+     * 滚动模式下「轻点屏幕呼出工具栏」能不能成立。
+     *
+     * 滚动模式里点一下要切换工具栏（顶栏 + 底栏），而那一层是挂在滚动容器
+     * **外面**的父节点上：如果滚动容器把轻点也当成自己的手势消费掉，
+     * 工具栏就永远呼不出来 —— 用户看到的就是「滚动模式下没有顶栏」。
+     *
+     * 这条测试直接盯住这个场景：正文放在 verticalScroll 里，
+     * 轻点一次必须仍然触发 onTap。
+     */
+    @Test
+    fun `滚动容器里的轻点仍会被父层收到（工具栏因此呼得出来）`() {
+        lateinit var scroll: androidx.compose.foundation.ScrollState
+        var taps = 0
+
+        compose.setContent {
+            scroll = rememberScrollState()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .readerPageGestures(
+                        gestureKey = Unit,
+                        flipThresholdPx = 120f,
+                        onTap = { _, _ -> taps++; true },
+                        onHorizontalSwipe = { },
+                    ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .testTag("body"),
+                ) {
+                    lines.forEach { Text(it) }
+                }
+            }
+        }
+
+        compose.onNodeWithTag("body").performTouchInput { click(Offset(40f, 40f)) }
+        compose.waitForIdle()
+
+        assertEquals(
+            "轻点滚动正文必须把 onTap 交给父层（否则滚动模式里工具栏呼不出来）",
+            1,
+            taps,
+        )
+        assertEquals("轻点不该让正文滚动", 0, scroll.value)
+    }
+
     @Test
     fun `子树消费过的手势不会再被当成点击`() {
         var taps = 0
