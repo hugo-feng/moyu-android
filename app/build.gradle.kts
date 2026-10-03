@@ -23,8 +23,8 @@ android {
         applicationId = "com.moyu.reader"
         minSdk = 26          // Android 8.0：覆盖 99%+ 在用设备，且能用 java.time 等现代 API
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.1.2"
+        versionCode = 14
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -238,6 +238,17 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     // Robolectric：让 Room / Android framework 相关测试直接跑在 JVM 上（无需模拟器）
     testImplementation("org.robolectric:robolectric:4.13")
+    /**
+     * Compose 的 UI 测试框架也要能跑在 JVM 上。
+     *
+     * 没有它，「手势到底有没有生效」只能靠肉眼在真机上试 ——
+     * 而阅读页最要命的两个问题（滚动滚不动、点击被吃掉）恰恰都属于这一类，
+     * 并且连续两轮都没修对。有了它，构建时就能往界面里真的注入一次滑动，
+     * 然后断言滚动位置确实变了。
+     */
+    testImplementation(platform("androidx.compose:compose-bom:2024.10.01"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.10.01"))

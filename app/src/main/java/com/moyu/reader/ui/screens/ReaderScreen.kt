@@ -240,11 +240,92 @@ fun ReaderScreen(
         onDispose { }
     }
 
+    // —— 电量：ACTION_BATTERY_CHANGED 是 sticky intent，注册即回调 ——
+    //
+    // 放在**阅读页的最外层**而不是分页视图里：分页与滚动两种模式都要画地脚，
+    // 原先它写在分页视图内部，滚动模式的地脚就拿不到电量（永远显示空壳）。
+    var batteryPercent by remember { mutableIntStateOf(-1) }
+    DisposableEffect(context, settings.showStatusBar) {
+        if (!settings.showStatusBar) {
+            onDispose { }
+        } else {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
+                    val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+                    batteryPercent =
+                        if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+                }
+            }
+            val filter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+            // Android 14+ 要求显式声明是否导出，否则注册会抛异常
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+            onDispose { runCatching { context.unregisterReceiver(receiver) } }
+        }
+    }
+
+    /**
+     * 阅读页的根容器 —— **手势层就是它自己**。
+     *
+     * ## 为什么手势层必须是父节点，而不能是盖在上面的兄弟节点
+     *
+     * 之前它是一张 `Modifier.fillMaxSize()` 的全屏兄弟层，压在正文之上。
+     * 看起来「只要不消费事件就能让滚动继续」，其实**完全不是**：
+     * Compose 的命中测试在碰到一个没有声明共享的指针输入节点时，
+     * 会**直接截断**，下面的兄弟节点根本不会进入命中路径
+     * （见 `NodeCoordinator.PointerInputSource.shareWithSiblings`：
+     *  只有 `sharePointerInputWithSiblings() == true` 才 `acceptHits()` 继续找兄弟，
+     *  否则 `return false` 就此打住）。`Modifier.pointerInput` 默认就是不共享。
+     *
+     * 于是 `verticalScroll` **一个事件都收不到** —— 无论正文是
+     * `SelectionContainer`、`BasicTextField` 还是普通 `Text`，都滚不动。
+     * 这就是「滚动模式完全不能滚」反复修不好的真正原因：问题不在正文，
+     * 在于它上面的那层把事件全挡住了。
+     *
+     * 现在手势逻辑挂在**根节点**上：父子的命中测试互不截断，
+     * 子树（滚动容器、按钮、面板）先拿到事件 —— Main 阶段是冒泡的，
+     * 子节点先处理 —— 谁消费了，我们就不再处理这次手势。
+     */
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(palette.background),
+            .background(palette.background)
+            .readerPageGestures(
+                gestureKey = settings.pageMode,
+                flipThresholdPx = with(density) { 56.dp.toPx() },
+                onTap = { position, widthPx ->
+                    // 面板开着的时候不做热区判定：那会儿用户是在操作界面
+                    if (sheet == ReaderSheet.NONE) {
+                        val third = widthPx / 3f
+                        when {
+                            settings.pageMode == PageMode.SCROLL ||
+                                (position.x >= third && position.x <= third * 2) -> {
+                                chromeVisible = !chromeVisible
+                                if (!chromeVisible) sheet = ReaderSheet.NONE
+                            }
+
+                            position.x < third -> if (!chromeVisible) viewModel.flip(-1, density)
+
+                            else -> if (!chromeVisible) viewModel.flip(1, density)
+                        }
+                    }
+                    true
+                },
+                onHorizontalSwipe = { totalX ->
+                    if (settings.pageMode != PageMode.SCROLL) {
+                        viewModel.flip(if (totalX < 0f) 1 else -1, density)
+                    }
+                },
+            ),
     ) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalBatteryPercent provides batteryPercent,
+        ) {
         // 护眼色温：用极暖的橙色叠加并降低不透明度，
         // 比直接调低色温（改背景色）更能保留主题本身的观感。
         if (settings.eyeCareWarmth > 0f) {
@@ -286,6 +367,8 @@ fun ReaderScreen(
                     chapterNumberLabel = chapterNumberLabel(chapter?.title.orEmpty(), chapterIndex),
                     highlights = highlights,
                     settings = settings,
+                    // 滚动模式没有「页」，页码由滚动位置折算（见 setScrollChapterOffset）
+                    pageNumber = pageIndex + 1,
                     viewModel = viewModel,
                     autoReading = autoReading,
                     // 滚到本章末尾时自动进入下一章，这样自动阅读能一直读下去
@@ -320,93 +403,6 @@ fun ReaderScreen(
             }
         }
 
-
-        /**
-         * 手势层：**整个阅读页只有这一层**，而且全程不消费事件。
-         *
-         * ## 为什么必须只有一层（用户报的「要点两下才能翻页」）
-         *
-         * 之前这里是两层叠加：一层是 `detectTapGestures` +
-         * `detectHorizontalDragGestures`（只在分页模式注册），另一层是自己写的
-         * 指针跟踪。两层都实现了同一套三热区逻辑，于是**同一次点击被处理两遍**：
-         *   - 中间热区被切换两次 → 工具栏看起来「点了没反应」；
-         *   - 左右热区连翻两页 → 用户只好再点一次「补回来」。
-         * 再加上旧实现结尾那个「等手指全部抬起」的循环：它在手指已经抬起之后
-         * 才开始等，于是**下一次点击被整个吃掉** —— 这才是
-         * 「覆盖模式要点两下才能切换下一页」的真正来源。
-         *
-         * ## 为什么不能用 detectTapGestures（用户报的「滚动不了」）
-         *
-         * 它一旦挂上就消费整条手势流：滚动模式的 `verticalScroll`
-         * 再也收不到拖动。而且它判定点击只看按下与抬起的时间差，
-         * **完全不关心中间移动了多远** —— 快速滑动也会被判成点击。
-         *
-         * ## 现在这一层的职责
-         *
-         * 只跟踪指针、只做判定，**一个事件都不消费**：
-         *   - 位移没超过 `touchSlop` → 点击：左/中/右三热区；
-         *   - 分页模式下横向位移超过阈值 → 翻页（判断累计位移而不是单帧增量，
-         *     否则一次滑动会产生很多个超过阈值的 move，一划连翻好几页）；
-         *   - 滚动模式下的纵向拖动 → 不消费，原样交给 `verticalScroll`。
-         *
-         * 正文自身不带任何手势：点击翻页、横向滑动翻页、纵向拖动滚动，
-         * 全部由这一层处理（正文一挂手势就会把滚动吃掉）。
-         *
-         * 「等手指抬起」那个循环已经删掉：内层循环本来就在抬手时退出，
-         * 外层的 `awaitFirstDown` 天然只认**新的按下**，不需要额外排空。
-         */
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(settings.pageMode) {
-                    val slop = viewConfiguration.touchSlop
-                    val flipThreshold = 56.dp.toPx()
-                    awaitPointerEventScope {
-                        while (true) {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            var totalX = 0f
-                            var totalY = 0f
-                            var moved = false
-
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!change.pressed) break
-                                // 必须用 IgnoreConsumed：滚动层消费过的位移
-                                // 用 positionChange() 读出来是 0，位移就永远累计不起来
-                                val delta = change.positionChangeIgnoreConsumed()
-                                totalX += delta.x
-                                totalY += delta.y
-                                if (!moved && kotlin.math.hypot(totalX, totalY) > slop) {
-                                    moved = true
-                                }
-                            }
-
-                            if (!moved) {
-                                val third = size.width / 3f
-                                val x = down.position.x
-                                when {
-                                    settings.pageMode == PageMode.SCROLL ||
-                                        (x >= third && x <= third * 2) -> {
-                                        chromeVisible = !chromeVisible
-                                        if (!chromeVisible) sheet = ReaderSheet.NONE
-                                    }
-
-                                    x < third -> if (!chromeVisible) viewModel.flip(-1, density)
-
-                                    else -> if (!chromeVisible) viewModel.flip(1, density)
-                                }
-                            } else if (moved &&
-                                settings.pageMode != PageMode.SCROLL &&
-                                kotlin.math.abs(totalX) > flipThreshold &&
-                                kotlin.math.abs(totalX) > kotlin.math.abs(totalY)
-                            ) {
-                                viewModel.flip(if (totalX < 0f) 1 else -1, density)
-                            }
-                        }
-                    }
-                },
-        )
 
         // —— 顶部栏 ——
         if (chromeVisible) {
@@ -509,6 +505,7 @@ fun ReaderScreen(
                 )
             }
         }
+        }
     }
 }
 
@@ -575,36 +572,6 @@ private fun PagedReader(
         }
     }
 
-    // —— 电量：ACTION_BATTERY_CHANGED 是 sticky intent，注册即回调 ——
-    //
-    // 用它而不是 BatteryManager 的 getIntProperty：后者同样无需权限，
-    // 但拿不到「电量变化」的推送，只能轮询。sticky 广播既不轮询也不需要权限。
-    val context = LocalContext.current
-    var batteryPercent by remember { mutableIntStateOf(-1) }
-    DisposableEffect(context, settings.showStatusBar) {
-        if (!settings.showStatusBar) {
-            onDispose { }
-        } else {
-            val receiver = object : android.content.BroadcastReceiver() {
-                override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
-                    val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
-                    val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
-                    batteryPercent =
-                        if (level >= 0 && scale > 0) (level * 100 / scale) else -1
-                }
-            }
-            val filter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
-            // Android 14+ 要求显式声明是否导出，否则注册会抛异常
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                context.registerReceiver(receiver, filter)
-            }
-            onDispose { runCatching { context.unregisterReceiver(receiver) } }
-        }
-    }
-
     // 翻页动画：以 flipToken 为 key 重新触发一次入场动画
     var entered by remember(flipToken) { mutableStateOf(false) }
     LaunchedEffect(flipToken) {
@@ -627,9 +594,6 @@ private fun PagedReader(
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val pageWidthPx = with(uiDensity) { screenWidthDp.dp.toPx() }
 
-    androidx.compose.runtime.CompositionLocalProvider(
-        LocalBatteryPercent provides batteryPercent,
-    ) {
         /**
          * 两段式：上「正文层」、下「独立地脚」。
          *
@@ -751,7 +715,6 @@ private fun PagedReader(
             pageNumber = pageNumber,
             settings = settings,
         )
-        }
     }
 }
 
@@ -1229,6 +1192,8 @@ private fun ScrollReader(
     chapterNumberLabel: String,
     highlights: List<IntRange>,
     settings: com.moyu.reader.data.prefs.ReaderSettings,
+    /** 当前页码（按滚动位置折算，用于地脚） */
+    pageNumber: Int,
     /** 取版心实测高度用 —— 自动滚动的速度必须与分页模式同口径。 */
     viewModel: ReaderViewModel,
     /** 自动阅读是否开启。开启时按「秒/页」匀速向下滚动。 */
@@ -1275,6 +1240,17 @@ private fun ScrollReader(
     // 滚动容器的可视高度。自动阅读每次推进「一屏」，因此需要它。
     // 用 BoxWithConstraints 而不是 onSizeChanged：后者要么多一个 state、
     // 要么在首帧拿不到值，而自动阅读恰恰在开启的第一秒就要用。
+    //
+    // 两段式结构与分页模式一致：滚动区 weight(1f) 吃掉剩余空间，
+    // 地脚（页码 / 时间 / 电量）是 Column 的第二个子项，钉在底部。
+    // 之前滚动模式**没有地脚** —— 用户报「滚动模式下底部电池之类的为什么没了」，
+    // 因为那时地脚只画在分页视图里。
+    androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxSize()) {
+    androidx.compose.foundation.layout.Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f),
+    ) {
     androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -1414,6 +1390,20 @@ private fun ScrollReader(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+    }
+
+        /**
+         * 地脚：页码 / 时间 / 电量。
+         *
+         * 滚动模式原先没有它 —— 用户报「滚动模式下底部电池之类的为什么没了」。
+         * 与分页模式一样，它是 Column 的第二个子项，由结构保证在底部，
+         * 不参与滚动（滚动内容在它上面的 weight(1f) 区域里）。
+         */
+        PageFooterBar(
+            pageNumber = pageNumber,
+            settings = settings,
+        )
     }
 }
 
