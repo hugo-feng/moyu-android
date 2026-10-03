@@ -222,21 +222,28 @@ fun ShelfScreen(
                     val groupColumnWidth = (available - gap * (columns - 1)) / columns
 
                     /**
-                     * 缩略图高度用**固定值**，不再按列宽与宽高比推算。
+                     * 缩略图尺寸**由列宽算出来**，而且是竖版（2:3）。
                      *
-                     * ## 为什么放弃推算
+                     * ## 上一版错在哪（用户报的「书架页为什么是横置的」）
                      *
-                     * 之前是 `(列宽 − 内边距) / 2 × 4.3/3`，看起来合理，
-                     * 但真机上分组卡只显示出一块色块，**名称与「共 N 本」被裁掉**。
-                     * 推算链路太长（列宽 → 减内边距 → 除 2 → 乘宽高比），
-                     * 其中任何一步与实际渲染不符，结果就整体偏大、把文字挤出卡片。
+                     * 之前这里只给了一个固定高度 `46.dp`，宽度交给 `weight(1f)`
+                     * 去撑满 —— 结果每个缩略块都变成**横着的方块**
+                     * （实测约 165×105，宽高比 1.57），四块拼在一起，
+                     * 整张卡片看起来就是一张横卡。而主流阅读器（番茄、微信读书）
+                     * 的书架一律是**竖版封面**：宽高比 2:3，一眼就能认出是书。
                      *
-                     * 分组卡里的缩略图只是「这个分组大概有什么书」的示意，
-                     * 不需要精确的封面比例。给一个固定的 46.dp 高度：
-                     * 两行共 96.dp，加上名称与本数约 40.dp，
-                     * 卡片总高约 150.dp —— 无论屏幕多宽都不会溢出。
+                     * 现在宽与高**都给死**，不依赖任何推算或 weight：
+                     *   - 宽度 = （列宽 − 卡片内边距 − 中间缝）÷ 2
+                     *   - 高度 = 宽度 × 1.5  →  2:3 竖版，与书架里的封面同比例
+                     *
+                     * 两轴都确定，就不会再出现「宽度撑满变成横块」或
+                     * 「高度算大把文字挤出卡片」这两种反复出现过的问题。
                      */
-                    val thumbHeight = 46.dp
+                    val cardPadding = 8.dp
+                    val thumbGap = 4.dp
+                    val thumbSize = groupThumbSize(groupColumnWidth, cardPadding, thumbGap)
+                    val thumbWidth = thumbSize.width
+                    val thumbHeight = thumbSize.height
 
                     androidx.compose.foundation.layout.FlowRow(
                         modifier = Modifier
@@ -249,6 +256,7 @@ fun ShelfScreen(
                         groupCards.forEach { group ->
                             GroupCard(
                                 group = group,
+                                thumbWidth = thumbWidth,
                                 thumbHeight = thumbHeight,
                                 onClick = { viewModel.openGroup(group.id) },
                                 onDelete = { viewModel.deleteGroup(group.id) },
@@ -257,7 +265,7 @@ fun ShelfScreen(
                             )
                         }
                         NewGroupCard(
-                            thumbsHeight = thumbHeight * 2 + 4.dp,
+                            thumbsHeight = thumbHeight * 2 + thumbGap,
                             onCreate = { name -> viewModel.createGroup(name) },
                             modifier = Modifier.width(groupColumnWidth),
                         )
@@ -403,7 +411,29 @@ fun ShelfScreen(
 }
 
 /**
- * 书库顶栏：问候语 + 「书库」标题 + 一行附注 + 统计入口。
+ * 分组卡里每个小缩略封面的尺寸。
+ *
+ * **宽与高都给死，且必须是竖版 2:3。**
+ *
+ * 之前只给高度、宽度交给 `weight(1f)` 撑满，于是每块都成了**横着的方块**
+ * （实测约 165×105，宽高比 1.57）—— 用户的原话是
+ * 「书架页为什么是横置的，你自己看看他像番茄的吗」。
+ * 主流阅读器的书架一律是竖版封面，一眼就能认出是书，横块则像色卡。
+ *
+ * 抽成函数是为了**能被测试盯住**：宽高比这种事，靠肉眼在真机上看容易漏，
+ * 写成断言就再也不会悄悄变回横的。
+ */
+internal fun groupThumbSize(
+    columnWidth: androidx.compose.ui.unit.Dp,
+    cardPadding: androidx.compose.ui.unit.Dp = 8.dp,
+    gap: androidx.compose.ui.unit.Dp = 4.dp,
+): androidx.compose.ui.unit.DpSize {
+    val width = (columnWidth - cardPadding * 2 - gap) / 2
+    return androidx.compose.ui.unit.DpSize(width, width * 1.5f)
+}
+
+/**
+ * 书架顶栏：问候语 + 「书库」标题 + 一行附注 + 统计入口。
  *
  * ## 为什么这里是这副样子
  *
@@ -584,6 +614,8 @@ private fun ShelfTitleRow(
 @Composable
 private fun GroupCard(
     group: ShelfGroup,
+    /** 每个小缩略封面的确定尺寸（2:3 竖版），由外层按列宽算好传入。 */
+    thumbWidth: androidx.compose.ui.unit.Dp,
     thumbHeight: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
     onDelete: (() -> Unit)?,
@@ -609,8 +641,8 @@ private fun GroupCard(
                 )
                 .padding(8.dp),
         ) {
-            // 2 列缩略图。用 Row/Column 手动排而不是 LazyVerticalGrid：
-            // 只有 4 个固定格子，嵌套一个可滚动容器只会带来测量问题。
+            // 2×2 竖版缩略封面（像一叠书脊）。用 Row/Column 手动排而不是
+            // LazyVerticalGrid：只有 4 个固定格子，嵌套可滚动容器只会带来测量问题。
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 repeat(2) { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -618,8 +650,8 @@ private fun GroupCard(
                             val book = group.previewBooks.getOrNull(row * 2 + col)
                             GroupThumb(
                                 book = book,
+                                width = thumbWidth,
                                 height = thumbHeight,
-                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
@@ -724,15 +756,14 @@ private fun GroupCard(
 @Composable
 private fun GroupThumb(
     book: com.moyu.reader.data.model.Book?,
+    /** 宽与高都**必须**由外层给定：只给高度、宽度交给 weight 撑满， */
+    /** 结果就是横着的方块（用户报的「书架页为什么是横置的」）。 */
+    width: androidx.compose.ui.unit.Dp,
     height: androidx.compose.ui.unit.Dp,
-    modifier: Modifier = Modifier,
 ) {
     val palette = moyuPalette()
-    // 高度由外层按列宽算好传入 —— 不再用 aspectRatio。
-    // 在 Row + weight 里 aspectRatio 拿不到确定宽度，会退化成正方形，
-    // 于是两行缩略图把分组名与本数挤出卡片（用户看到的「只有色块」）。
-    val base = modifier
-        .height(height)
+    val base = Modifier
+        .size(width = width, height = height)
         .clip(RoundedCornerShape(4.dp))
     Box(
         modifier = if (book != null) {
